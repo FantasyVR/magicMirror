@@ -2,6 +2,7 @@
 Then we use XPBD-FEM (gpu version, Jacobian solver) to simulate the deformation of 2D object
 """
 import taichi as ti
+import time
 from taichi.lang.ops import sqrt
 
 ti.init(arch=ti.gpu, kernel_profiler=True)
@@ -24,7 +25,7 @@ B = ti.Matrix.field(2, 2, float, NF)  # D_m^{-1}
 F = ti.Matrix.field(2, 2, float, NF)  # deformation gradient
 lagrangian = ti.field(float, NF)  # lagrangian multipliers
 gravity = ti.Vector([0, -1.2])
-MaxIte = 50
+MaxIte = 20
 NumSteps = 5
 
 # For validation
@@ -124,6 +125,13 @@ def semiEuler():
             oldPos[i] = pos[i]
             pos[i] += h * vel[i]
 @ti.kernel
+def updtePosition():
+    # update position
+    for i in range(NV):
+        if (invMass[i] != 0.0):
+            pos[i] += accPos[i]
+
+@ti.kernel
 def updteVelocity():
     # update velocity
     for i in range(NV):
@@ -131,10 +139,13 @@ def updteVelocity():
             pos[i] += accPos[i]
             vel[i] = (pos[i] - oldPos[i]) / h
 @ti.kernel
-def solveConstraints():
+def resetAccPos():
     for i in range(NV):
         accPos[i]  = ti.Vector([0.0,0.0])
-    # solving constriants
+
+@ti.kernel
+def solveConstraints():
+    # solving constriants parallel
     for i in range(NF):
         ia, ib, ic = f2v[i]
         a, b, c = pos[ia], pos[ib], pos[ic]
@@ -241,7 +252,10 @@ init_pos()
 pause = False
 gui = ti.GUI('XPBD-FEM')
 first = True
+drawTime = 0
+sumTime = 0
 while gui.running:
+    realStart = time.time()
     for e in gui.get_events():
         if e.key == gui.ESCAPE:
             gui.running = False
@@ -251,23 +265,30 @@ while gui.running:
     attractor_pos[None] = mouse_pos
     attractor_strength[None] = gui.is_pressed(gui.LMB) - gui.is_pressed(
         gui.RMB)
+    
+
     gui.circle(mouse_pos, radius=15, color=0x336699)
     if not pause:
         for i in range(NumSteps):
             semiEuler()
             resetLagrangian()
             for ite in range(MaxIte):
+                resetAccPos()
                 solveConstraints()
+                updtePosition()
             updteVelocity()
         pass
     # if first:
     #     checkGradient()
     #     first = not first
-    # faces = f2v.to_numpy()
-    # for i in range(NF):
-    #     ia, ib, ic = faces[i]
-    #     a, b, c = pos[ia], pos[ib], pos[ic]
-    #     gui.triangle(a, b, c, color=0x00FF00)
+    ti.sync()
+    start = time.time()
+    faces = f2v.to_numpy()
+    for i in range(NF):
+        ia, ib, ic = faces[i]
+        a, b, c = pos[ia], pos[ib], pos[ic]
+        gui.triangle(a, b, c, color=0x00FF00)
+
     positions = pos.to_numpy()
     gui.circles(positions, radius=2, color=0x0000FF)
     for i in range(N + 1):
@@ -275,4 +296,9 @@ while gui.running:
         staticVerts = positions[k]
         gui.circle(staticVerts, radius=5, color=0xFF0000)
     gui.show()
+    end = time.time()
+    drawTime = (end - start)
+    sumTime = (end - realStart)
+    print("Draw Time Ratio; ", drawTime / sumTime )
+
 ti.kernel_profiler_print()

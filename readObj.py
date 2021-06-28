@@ -15,6 +15,9 @@ class Objfile:
     m_indices = []
     m_filename = ""
     def read(self, filename=""):
+        """
+            Read ``.obj`` file created by Blender
+        """
         self.m_filename = filename
         if filename == "":
             print("please give me the obj file name")
@@ -43,6 +46,40 @@ class Objfile:
                     self.m_indices.append(tri)
                     self.m_numFaces += 1
             file.close()
+    def readTxt(self, filename=""):
+        """
+            Read 2D Mesh generate by Miles Macklin's program
+        """
+        self.m_filename = filename
+        if filename == "":
+            print("please give me the obj file name")
+            sys.exit(1)
+
+        with open(filename,"r") as file:
+            point = False
+            triangle = False
+            lines = [line.strip("\n") for line in file.readlines()]
+            for line in lines:
+                if 'numPoints' in line:
+                    point = True
+                    triangle = False
+                    continue
+                elif 'numTriangle' in line:
+                    triangle = True
+                    point = False
+                    continue
+
+                if point:
+                    pos = [float(p) for p in line.split(" ")]
+                    self.m_vertices.append(pos)
+                    self.m_numVertices += 1
+                    continue
+                elif triangle:
+                    tri =[int(xx) for xx in line.split(" ")]
+                    self.m_indices.append(tri)
+                    self.m_numFaces += 1
+                    continue
+            file.close()
 
     def ouputObjfile(self):
         print(f"{self.m_numVertices } vertices, {self.m_numFaces} faces")
@@ -62,7 +99,8 @@ class Objfile:
 
 if __name__ == "__main__":
     objFile = Objfile()
-    objFile.read("2dMesh.obj")
+    # objFile.read("2dMesh.obj")
+    objFile.readTxt("bunny.txt")
     vertices = objFile.getVertice()
     print(vertices)
     faces = objFile.getFaces()
