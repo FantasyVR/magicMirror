@@ -23,15 +23,19 @@ triangles = obj.getFaces()
 NV = obj.getNumVertice()
 NF = obj.getNumFaces()  # number of faces
 pos = ti.Vector.field(2, float, NV)
-accPos = ti.Vector.field(2, float, NV)
 oldPos = ti.Vector.field(2, float, NV)
 vel = ti.Vector.field(2, float, NV)  # velocity of particles
 invMass = ti.field(float, NV)  #inverse mass of particles
+
 
 f2v = ti.Vector.field(3, int, NF)  # ids of three vertices of each face
 B = ti.Matrix.field(2, 2, float, NF)  # D_m^{-1}
 F = ti.Matrix.field(2, 2, float, NF)  # deformation gradient
 lagrangian = ti.field(float, NF)  # lagrangian multipliers
+
+gradient = ti.Vector.field(2,float, 3 * NF)
+dLambda = ti.field(float, NF)
+
 gravity = ti.Vector([0, -1.2])
 MaxIte = 20
 NumSteps = 10
@@ -119,15 +123,6 @@ def semiEuler():
             oldPos[i] = pos[i]
             pos[i] = pos[i] + h * vel[i]
 
-
-@ti.kernel
-def updtePosition():
-    # update position
-    for i in range(NV):
-        if (invMass[i] != 0.0):
-            pos[i] = pos[i] + accPos[i]
-
-
 @ti.kernel
 def updteVelocity():
     # update velocity
@@ -137,14 +132,7 @@ def updteVelocity():
 
 
 @ti.kernel
-def resetAccPos():
-    for i in range(NV):
-        accPos[i] = ti.Vector([0.0, 0.0])
-
-
-@ti.kernel
-def solveConstraints():
-    # solving constriants in parallel
+def computeGradientVector():
     for i in range(NF):
         ia, ib, ic = f2v[i]
         a, b, c = pos[ia], pos[ib], pos[ic]
@@ -154,21 +142,29 @@ def solveConstraints():
             print("wrong invMass function")
         D_s = ti.Matrix.cols([b - a, c - a])
         F[i] = D_s @ B[i]
-        # F[i] = ti.Matrix([[1.0,0.0],[0.0,1.0]])
         U, S, V = ti.svd(F[i])
         constraint = sqrt((S[0, 0] - 1)**2 + (S[1, 1] - 1)**2)
         g0, g1, g2, isSuccess = computeGradient(i, U, S, V)
         if isSuccess:
             l = invM0 * g0.norm_sqr() + invM1 * g1.norm_sqr(
             ) + invM2 * g2.norm_sqr()
-            deltaLambda = -(constraint + alpha * lagrangian[i]) / (l + alpha)
-            lagrangian[i] = lagrangian[i] + deltaLambda
-            if (invM0 != 0.0):
-                accPos[ia] += omega * invM0 * deltaLambda * g0
-            if (invM1 != 0.0):
-                accPos[ib] += omega * invM1 * deltaLambda * g1
-            if (invM2 != 0.0):
-                accPos[ic] += omega * invM2 * deltaLambda * g2
+            dLambda[i] = -(constraint + alpha * lagrangian[i]) / (l + alpha)
+            lagrangian[i] = lagrangian[i] + dLambda[i]
+            gradient[3 * i + 0]  = g0
+            gradient[3 * i + 1]  = g1
+            gradient[3 * i + 2]  = g2
+
+@ti.kernel
+def updatePos():
+    for i in range(NF):
+        ia, ib, ic = f2v[i]
+        invM0, invM1, invM2 = invMass[ia], invMass[ib], invMass[ic]
+        if (invM0 != 0.0):
+            pos[ia] += omega * invM0 * dLambda[i] * gradient[3 * i + 0]
+        if (invM1 != 0.0):
+            pos[ib] += omega * invM1 * dLambda[i] * gradient[3 * i + 1]
+        if (invM2 != 0.0):
+            pos[ic] += omega * invM2 * dLambda[i] * gradient[3 * i + 2]
 
 
 if __name__ == "__main__":
@@ -200,11 +196,9 @@ if __name__ == "__main__":
                 semiEuler()
                 resetLagrangian()
                 for ite in range(MaxIte):
-                    resetAccPos()
-                    solveConstraints()
-                    updtePosition()
+                    computeGradientVector()
+                    updatePos()
                 updteVelocity()
-            pass
         ti.sync()
         start = time.time()
         if not drawPoint:
