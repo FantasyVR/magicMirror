@@ -11,33 +11,33 @@ gravity = ti.Vector([0, -9.8])
 h = 0.01  # timestep size
 N = 3  # number of particles
 NC = N - 1  # number of distance constraint
-NStep = 5
-NMaxIte = 2
+NStep = 21
+NMaxIte = 11
 
-pos = ti.Vector.field(2, float, N)
-oldPos = ti.Vector.field(2, float, N)
-predictionPos = ti.Vector.field(2, float, N)
-vel = ti.Vector.field(2, float, N)
-invmass = ti.field(float, N)
+pos = ti.Vector.field(2, ti.f64, N)
+oldPos = ti.Vector.field(2, ti.f64, N)
+predictionPos = ti.Vector.field(2, ti.f64, N)
+vel = ti.Vector.field(2, ti.f64, N)
+invmass = ti.field(ti.f64, N)
 
 disConsIdx = ti.Vector.field(2, int, NC)
-disConsLen = ti.field(float, NC)
-gradient = ti.Vector.field(2, float, 2 * NC)
-constraint = ti.field(float, NC)
+disConsLen = ti.field(ti.f64, NC)
+gradient = ti.Vector.field(2, ti.f64, 2 * NC)
+constraint = ti.field(ti.f64, NC)
 
 #xpbd
 compliance = 1.0e-6
 alpha = compliance / h / h
-lagrangian = ti.field(float, NC)
+lagrangian = ti.field(ti.f64, NC)
 
 # geometric stiffness
-K = ti.Matrix.field(2, 2, float, (N, N))
+K = ti.Matrix.field(2, 2, ti.f64, (N, N))
 
 # For validation
-dualResidual = ti.field(float, ())
-primalResidual = ti.field(float, ())
-maxdualResidual = ti.field(float, ())
-maxprimalResidual = ti.field(float, ())
+dualResidual = ti.field(ti.f64, ())
+primalResidual = ti.field(ti.f64, ())
+maxdualResidual = ti.field(ti.f64, ())
+maxprimalResidual = ti.field(ti.f64, ())
 
 
 @ti.kernel
@@ -101,13 +101,13 @@ def computeCg():
         gradient[2 * i + 0] = n
         gradient[2 * i + 1] = -n
         # geometric stiffness
-        print("p[", idx1,"]:", p1)
-        print("p[", idx2,"]:", p2)
-        print("Lambda: ", lagrangian[i])
-        print("gradient: ", n)
+        # print("p[", idx1,"]:", p1)
+        # print("p[", idx2,"]:", p2)
+        # print("Lambda: ", lagrangian[i])
+        # print("gradient: ", n)
         I = ti.Matrix([[1.0, 0.0], [0.0, 1.0]])
         k = -lagrangian[i] / l * (I - n @ n.transpose())
-        print("k: ", k)
+        # print("k: ", k, "\n")
         K[idx1, idx1] -= k
         K[idx1, idx2] += k
         K[idx2, idx1] += k
@@ -117,7 +117,7 @@ def computeCg():
 def assemble(mass, p, prep, g, KK, l, c, cidx):
     dim = (2 * N + NC)  # the system dimension
 
-    A = np.zeros((dim, dim), dtype=np.float32)
+    A = np.zeros((dim, dim), dtype=np.float64)
     # uppper left: mass matrix
     for i in range(N):
         A[2 * i, 2 * i] = mass[i]
@@ -143,30 +143,32 @@ def assemble(mass, p, prep, g, KK, l, c, cidx):
         # xpbd lower right
         A[start + i, start + i] = alpha
 
-    np.set_printoptions(precision=4, suppress=True)
 
-    # geometric stiffness
+    # geometric stiffness : 
     G = np.zeros((2 * N, NC))
     for i in range(NC):
         idx1, idx2 = cidx[i]
         g0 = g[2 * i + 0]
         g1 = g[2 * i + 1]
-        G[2 * idx1:2 * idx1 + 2, i] += g0
-        G[2 * idx2:2 * idx2 + 2, i] += g1
-    print("G: \n", G.T)
-    print("l: ", l)
+        G[2 * idx1:2 * idx1 + 2, i] = g0
+        G[2 * idx2:2 * idx2 + 2, i] = g1
+    print("Gradient: \n", G.T)
+    # print("lagrangian multiplier: ", l)
     Gl = G @ l
-
+    print("GL ", Gl.T)
     # RHS
-    b = np.zeros(dim, dtype=np.float32)
+    b = np.zeros(dim, dtype=np.float64)
     b[2 * N:] = -c
     # geometric stiffness
-    for i in range(N):
+    for i in range(1,N):
         b[2 * i:2 * i + 2] = -mass[i] * (p[i] - prep[i])
     b[:2 * N] += Gl
+    np.set_printoptions(precision=5, suppress=False)
     print("A: \n", A)
     print("b: ", b)
     x = np.linalg.solve(A[2:, 2:], b[2:])
+    
+    np.set_printoptions(precision=5, suppress=False)
     print("Solusion: ", x)
     return x
 
@@ -175,9 +177,9 @@ def assemble(mass, p, prep, g, KK, l, c, cidx):
 def updatePos(x: ti.ext_arr()):
     for i in range(N - 1):
         pos[i + 1] += ti.Vector([x[2 * i + 0], x[2 * i + 1]])
-    print("Update Position: ")
-    for i in range(N):
-        print(pos[i])
+    # print("Update Position: ")
+    # for i in range(N):
+    #     print(pos[i])
 
 
 @ti.kernel
@@ -229,25 +231,38 @@ def computeResidual():
 initRod()
 initConstraint()
 for i in range(NStep):
-    print(f"\n-----------------------------start time step {i}-------------------------------")
+    print(f"########################################start time step {i+1}##########################################")
     semiEuler()
     resetLambda()
     resetK()
     for ite in range(NMaxIte):
-        print(f"\n-----------------------------start iteration  {ite}-------------------------------")
+        print(f"-----------------------------start iteration  {ite+1}-------------------------------")
+        print("position: ", repr(np.reshape(pos.to_numpy(),(1,2*N))))
+        if i == 20 and ite == 10:
+            np.savetxt('data/pos.txt', np.reshape(pos.to_numpy(),(1,2*N)), delimiter=',')
+            np.savetxt('data/lambda.txt',np.reshape(lagrangian.to_numpy(),(1,NC)),delimiter=',')
+            
         computeCg()
-        print("========================Start assmble matrix===================")
+        # print("========================Start assmble matrix===================")
         x = assemble(invmass.to_numpy(), pos.to_numpy(),
                      predictionPos.to_numpy(),
                      gradient.to_numpy(), K.to_numpy(), lagrangian.to_numpy(),
                      constraint.to_numpy(), disConsIdx.to_numpy())
-        print("=========================Ending assmble matrix=================\n")
+        # print("=========================Ending assmble matrix=================\n")
         updatePos(x)
+        print("Corrected position:", repr(np.reshape(pos.to_numpy(),(1,2*N))))
         updateLambda(x)
-        print("Lagrangian Multipler: ", lagrangian.to_numpy())
-        print(f"\n-----------------------------end iteration  {ite}-------------------------------")
+        print("Sum lambda: ", repr(np.reshape(lagrangian.to_numpy(),(1,NC))))
+        
+        if i == 20 and ite == 10:
+            np.savetxt('data/updatedPos.txt', np.reshape(pos.to_numpy(),(1,2*N)), delimiter=',')
+            np.savetxt('data/updateLambda.txt',np.reshape(lagrangian.to_numpy(),(1,NC)),delimiter=',')
+
+        # print("Lagrangian Multipler: ", lagrangian.to_numpy())
+        # print(f"\n-----------------------------end iteration  {ite}-------------------------------")
+    print("Old position:", repr(np.reshape(oldPos.to_numpy(),(1,2*N))))
     updateV()
-    print("After solusiton V:", vel.to_numpy())
+    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Velocities: ", repr(np.reshape(vel.to_numpy(),(1,2*N))))
 
 # gui = ti.GUI('Stable Constrainted Dynamics')
 # pause = True

@@ -8,11 +8,11 @@ import numpy as np
 ti.init(arch=ti.cpu)
 # general setting
 gravity = ti.Vector([0, -9.8])
-h = 0.1  # timestep size
-N = 3  # number of particles
+h = 0.01  # timestep size
+N = 20  # number of particles
 NC = N - 1  # number of distance constraint
-NStep = 2
-NMaxIte = 300
+NStep = 5
+NMaxIte = 30 
 
 pos = ti.Vector.field(2, float, N)
 oldPos = ti.Vector.field(2, float, N)
