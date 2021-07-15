@@ -9,10 +9,10 @@ ti.init(arch=ti.cpu)
 # general setting
 gravity = ti.Vector([0, -9.8])
 h = 0.01  # timestep size
-N = 30  # number of particles
+N = 10  # number of particles
 NC = N - 1  # number of distance constraint
-NStep = 5
-NMaxIte = 30
+NStep = 3
+NMaxIte = 5
 
 pos = ti.Vector.field(2, float, N)
 oldPos = ti.Vector.field(2, float, N)
@@ -39,6 +39,7 @@ def initRod():
         vel[i] = ti.Vector([0.0, 0.0])
         invmass[i] = 1.0
     invmass[0] = 0.0  # set the first particle static
+    invmass[9] = 100.0
 
 
 @ti.kernel
@@ -83,6 +84,13 @@ def computeCg():
         gradient[2 * i + 1] = -gradient[2 * i + 0]
 
 
+"""
+Assemble system matrix
+A =   |  M         -J' |
+      |  J       alpha |
+b = |              0                    |
+    | -(constraint + alpha * lambda)    |
+"""
 def assemble(mass, g, c, cidx):
     dim = (2 * N + NC)  # the system dimension
 
@@ -108,7 +116,6 @@ def assemble(mass, g, c, cidx):
         A[start + i, start + i] = alpha
 
     np.set_printoptions(precision=4, suppress=True)
-
     G = np.zeros((2 * N, NC))
     for i in range(NC):
         idx1, idx2 = cidx[i]
@@ -152,6 +159,7 @@ while gui.running:
         if e.key == gui.SPACE:
             pause = not pause
     if not pause:
+        # resetLambda()
         for i in range(NStep):
             semiEuler()
             resetLambda()
