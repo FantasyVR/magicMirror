@@ -1,6 +1,6 @@
 """
 Rod simulation based on [Stable Constrainted Dynamics, Maxime Tournier et.al, 2015.] 
-with Schur complement.
+with Schur complement and we make the global system matrix symmetric.
 """
 import taichi as ti
 from taichi.lang.ops import abs, sqrt
@@ -12,8 +12,8 @@ gravity = ti.Vector([0, -9.8])
 h = 0.01  # timestep size
 
 NStep = 1  # number of steps in each frame
-NMaxIte = 3  # number of iterations in each step
-N = 3  # number of particles
+NMaxIte = 5  # number of iterations in each step
+N = 10  # number of particles
 NC = N - 1  # number of distance constraint
 
 pos = ti.Vector.field(2, ti.f64, N)
@@ -103,7 +103,7 @@ def computeCg():
         l = (p1 - p2).norm()
         n = (p1 - p2).normalized()
         # xpbd
-        constraint[i] = l - rest_len + alpha * lagrangian[i]
+        constraint[i] = l - rest_len - alpha * lagrangian[i]
         # print("p1: ",p1, ", p2: ", p2)
         # print("lambda: ", lagrangian[i])
         # print("constraint ", i , ": ", constraint[i])
@@ -126,12 +126,12 @@ def computeCg():
 """
 Solve the linear system with schur complement method
 A x = b
-A = | M-K    -G  |
-    | G'  alpha|
+A = | M+K    G  |
+    | G'  -alpha|
 x = | x |
     | y |
-b = | u | = |      -M(x - y) + J' * lambda      |
-    | v |   | -(constraint + alpha * lambda)    |
+b = | u | = |      -M(x - y) - J' * lambda      |
+    | v |   | -(constraint - alpha * lambda)    |
 
 Reference: https://en.wikipedia.org/wiki/Schur_complement
 """
@@ -150,7 +150,7 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
     # uppper left: geometric stiffness
     for i in range(N):
         for j in range(N):
-            A[2 * i:2 * i + 2, 2 * j:2 * j + 2] -= KK[i, j]
+            A[2 * i:2 * i + 2, 2 * j:2 * j + 2] += KK[i, j]
 
     # gradient matrix
     G = np.zeros((2 * N, NC))
@@ -163,7 +163,7 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
 
     # compliance matrix
     complianceMatrix = np.zeros((NC, NC), dtype=np.float64)
-    np.fill_diagonal(complianceMatrix, alpha)
+    np.fill_diagonal(complianceMatrix, -alpha)
 
     # RHS
     u = np.zeros(dim, dtype=np.float64)
@@ -175,7 +175,7 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
     print(f"norm(M(x-y)): {np.linalg.norm(u[2:])}")
     Gl = G @ l
     print(f"norm(GL): {np.linalg.norm(Gl[2:])}")
-    u += Gl
+    u -= Gl
     print(f">>> Primal Residual: {np.linalg.norm(u[2:])}")
     v = -c
     print(f">>> Dual Residual: {np.linalg.norm(v)}")
@@ -189,11 +189,11 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
     # print(f"u: {u}, v: {v}")
     # Schur complement
     GTAinv = np.transpose(G) @ inv(A)
-    S = complianceMatrix + GTAinv @ G
+    S = complianceMatrix - GTAinv @ G
 
     b = v - GTAinv @ u
     y = np.linalg.solve(S, b)  # delta lambda ??? some problems happend here
-    x = np.linalg.solve(A, u + G @ y)  # delta pos
+    x = np.linalg.solve(A, u - G @ y)  # delta pos
     # print(f"dx: {x}")
     # print(f"dl: {y}")
     print(f"norm(dx): {np.linalg.norm(x)}")
