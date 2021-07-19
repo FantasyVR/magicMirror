@@ -1,8 +1,6 @@
 """
-Rod simulation based on [Stable Constrainted Dynamics, Maxime Tournier et.al, 2015.]
-with Schur complement global system matrix symmetric.
-
-Set different stiffness
+Rod simulation based on [Stable Constrainted Dynamics, Maxime Tournier et.al, 2015.] 
+with Schur complement and we make the global system matrix symmetric.
 """
 import taichi as ti
 from taichi.lang.ops import abs, sqrt
@@ -27,7 +25,7 @@ vel = ti.Vector.field(2, ti.f64, N)
 mass = ti.field(ti.f64, N)
 
 disConsIdx = ti.Vector.field(
-    2, int, NC)  # each element store vertex indices of the constraint
+    2, ti.i32, NC)  # each element store vertex indices of the constraint
 disConsLen = ti.field(
     ti.f64, NC
 )  # rest state (rest length of spring in this example) of each constraint
@@ -38,10 +36,10 @@ constraint = ti.field(ti.f64, NC)  # constraints violation
 compliance = 1.0e-6
 alpha = compliance / h / h
 lagrangian = ti.field(ti.f64, NC)
-valpha = ti.field(ti.f64, NC)
+
 # geometric stiffness
 K = ti.Matrix.field(2, 2, ti.f64, (N, N))
-UsingGeometricStiffness = True
+UsingGeometricStiffness = False
 
 # For validation
 dualResidual = ti.field(ti.f64, ())
@@ -70,8 +68,7 @@ def initConstraint():
     for i in range(NC):
         disConsIdx[i] = ti.Vector([i, i + 1])
         disConsLen[i] = (pos[i + 1] - pos[i]).norm()
-        valpha[i] = alpha
-    valpha[0] = 100 * alpha
+
 
 @ti.kernel
 def semiEuler():
@@ -111,7 +108,7 @@ def computeCg():
         l = (p1 - p2).norm()
         n = (p1 - p2).normalized()
         # xpbd
-        constraint[i] = l - rest_len - valpha[i] * lagrangian[i]
+        constraint[i] = l - rest_len - alpha * lagrangian[i]
         # print("p1: ",p1, ", p2: ", p2)
         # print("lambda: ", lagrangian[i])
         # print("constraint ", i , ": ", constraint[i])
@@ -146,7 +143,7 @@ Reference: https://en.wikipedia.org/wiki/Schur_complement
 
 
 def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
-    print(f"------------------  iteration: {iteration} --------------")
+    # print(f"------------------  iteration: {iteration} --------------")
     dim = 2 * N
     # upper left matrix
     A = np.zeros((dim, dim), dtype=np.float64)
@@ -172,9 +169,7 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
 
     # compliance matrix
     complianceMatrix = np.zeros((NC, NC), dtype=np.float64)
-    for i in range(NC):
-        complianceMatrix[i,i] = -valpha[i]
-    # np.fill_diagonal(complianceMatrix, -alpha)
+    np.fill_diagonal(complianceMatrix, -alpha)
 
     # RHS
     u = np.zeros(dim, dtype=np.float64)
@@ -187,7 +182,6 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
     Gl = G @ l
     # print(f"norm(GL): {np.linalg.norm(Gl[2:])}")
     u -= Gl
-    u = np.zeros(dim, dtype=np.float64)
     # print(f">>> Primal Residual: {np.linalg.norm(u[2:])}")
     v = -c
     # print(f">>> Dual Residual: {np.linalg.norm(v)}")
@@ -245,7 +239,7 @@ def computeResidual(step: ti.i32):
         p1, p2 = pos[idx1], pos[idx2]
         constraint = (p1 - p2).norm() - rest_len
 
-        dualResidual[None] += abs(constraint + alpha[i] * lagrangian[i])
+        dualResidual[None] += abs(constraint + alpha * lagrangian[i])
 
         gradient = (p1 - p2).normalized()
         r0 = ti.Vector([0.0, 0.0])
@@ -290,7 +284,7 @@ while gui.running:
             UsingGeometricStiffness = not UsingGeometricStiffness
     if not pause:
         for step in range(NStep):
-            print(f"######################### Timestep: {count} ##############################")
+            # print(f"######################### Timestep: {count} ##############################")
             count += 1
             semiEuler()
             for ite in range(NMaxIte):
@@ -312,9 +306,26 @@ while gui.running:
     end = position[1:]
     gui.lines(begin, end, radius=3, color=0x0000FF)
     gui.circles(pos.to_numpy(), radius=5, color=0xffaa33)
-    gui.show()
-    # filename = f'./data/frame_{frame:05d}.png'   # create filename with suffix png
-    # frame += 1
-    # if frame == 500:
-    #     break
-    # gui.show(filename)
+    filename = f'./data/frame_{frame:05d}.png'   # create filename with suffix png
+    frame += 1
+    if frame == 50:
+        break
+    gui.show(filename)
+
+# for step in range(NStep):
+#     print(f"######################### Timestep: {step} ##############################")
+#     step += 1
+#     semiEuler()
+#     for ite in range(NMaxIte):
+#         resetK()
+#         computeCg()
+#         dx, dl = solveWithSchurComplement(mass.to_numpy(),
+#                                           pos.to_numpy(),
+#                                           predictionPos.to_numpy(),
+#                                           gradient.to_numpy(),
+#                                           K.to_numpy(),
+#                                           lagrangian.to_numpy(),
+#                                           constraint.to_numpy(),
+#                                           disConsIdx.to_numpy(), ite)
+#         updatePosLambda(dx, dl)
+#     updateV()
