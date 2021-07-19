@@ -1,6 +1,8 @@
 """
 Rod simulation based on [Stable Constrainted Dynamics, Maxime Tournier et.al, 2015.] 
-with Schur complement and we make the global system matrix symmetric.
+with Schur complement global system matrix symmetric.
+
+Set different stiffness
 """
 import taichi as ti
 from taichi.lang.ops import abs, sqrt
@@ -36,7 +38,7 @@ constraint = ti.field(ti.f64, NC)  # constraints violation
 compliance = 1.0e-6
 alpha = compliance / h / h
 lagrangian = ti.field(ti.f64, NC)
-
+valpha = ti.field(ti.f64, NC)
 # geometric stiffness
 K = ti.Matrix.field(2, 2, ti.f64, (N, N))
 UsingGeometricStiffness = True
@@ -68,7 +70,8 @@ def initConstraint():
     for i in range(NC):
         disConsIdx[i] = ti.Vector([i, i + 1])
         disConsLen[i] = (pos[i + 1] - pos[i]).norm()
-
+        valpha[i] = alpha
+    valpha[NC-1] = 100 * alpha
 
 @ti.kernel
 def semiEuler():
@@ -108,7 +111,7 @@ def computeCg():
         l = (p1 - p2).norm()
         n = (p1 - p2).normalized()
         # xpbd
-        constraint[i] = l - rest_len - alpha * lagrangian[i]
+        constraint[i] = l - rest_len - valpha[i] * lagrangian[i]
         # print("p1: ",p1, ", p2: ", p2)
         # print("lambda: ", lagrangian[i])
         # print("constraint ", i , ": ", constraint[i])
@@ -169,7 +172,9 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
 
     # compliance matrix
     complianceMatrix = np.zeros((NC, NC), dtype=np.float64)
-    np.fill_diagonal(complianceMatrix, -alpha)
+    for i in range(NC):
+        complianceMatrix[i,i] = -valpha[i]
+    # np.fill_diagonal(complianceMatrix, -alpha)
 
     # RHS
     u = np.zeros(dim, dtype=np.float64)
@@ -239,7 +244,7 @@ def computeResidual(step: ti.i32):
         p1, p2 = pos[idx1], pos[idx2]
         constraint = (p1 - p2).norm() - rest_len
 
-        dualResidual[None] += abs(constraint + alpha * lagrangian[i])
+        dualResidual[None] += abs(constraint + alpha[i] * lagrangian[i])
 
         gradient = (p1 - p2).normalized()
         r0 = ti.Vector([0.0, 0.0])
@@ -311,21 +316,3 @@ while gui.running:
     if frame == 500:
         break
     gui.show(filename)
-
-# for step in range(NStep):
-#     print(f"######################### Timestep: {step} ##############################")
-#     step += 1
-#     semiEuler()
-#     for ite in range(NMaxIte):
-#         resetK()
-#         computeCg()
-#         dx, dl = solveWithSchurComplement(mass.to_numpy(),
-#                                           pos.to_numpy(),
-#                                           predictionPos.to_numpy(),
-#                                           gradient.to_numpy(),
-#                                           K.to_numpy(),
-#                                           lagrangian.to_numpy(),
-#                                           constraint.to_numpy(),
-#                                           disConsIdx.to_numpy(), ite)
-#         updatePosLambda(dx, dl)
-#     updateV()

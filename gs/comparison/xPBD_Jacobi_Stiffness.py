@@ -28,6 +28,7 @@ lagrangian = ti.field(dtype=float, shape=NC)
 squareInverseTime = 1.0/(h * h)
 compliance = 1.0e-6
 alpha = compliance * squareInverseTime
+valpha = ti.field(float,NC)
 # For validation
 dualResidual = ti.field(float,())
 primalResidual = ti.field(float,())
@@ -48,6 +49,8 @@ def initConstraint():
     for i in range(NC):
         disConsIdx[i] = ti.Vector([i, i + 1])
         disConsLen[i] = (pos[i + 1] - pos[i]).norm()
+        valpha[i] = alpha
+    valpha[NC-1] = 100 * alpha
 
 @ti.kernel
 def semiEuler():
@@ -83,8 +86,8 @@ def update(ts:ti.i32, ite:ti.i32):
         p1, p2 = pos[idx1], pos[idx2]
         constraint = (p1 - p2).norm() - rest_len
         gradient = (p1 - p2).normalized()
-        deltaLagrangian = -(constraint + lagrangian[i] * alpha) / (
-            sumInvMass + alpha)
+        deltaLagrangian = -(constraint + lagrangian[i] * valpha[i]) / (
+            sumInvMass + valpha[i])
         lagrangian[i] += deltaLagrangian
         # print("[",ts, ",", ite,"], dL", i , ":", deltaLagrangian,", lambda:", lagrangian[i])
         if invMass1 != 0.0:
@@ -118,7 +121,7 @@ def computeResidual():
         p1, p2 = pos[idx1], pos[idx2]
         constraint = (p1 - p2).norm() - rest_len
         
-        dualResidual[None] += abs(constraint - alpha * lagrangian[i])
+        dualResidual[None] += abs(constraint - valpha[i] * lagrangian[i])
         
         gradient = (p1 - p2).normalized()
         r0 = ti.Vector([0.0,0.0])
