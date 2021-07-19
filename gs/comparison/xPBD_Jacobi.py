@@ -40,7 +40,7 @@ def initRod():
         vel[i] = ti.Vector([0.0, 0.0])
         invmass[i] = 1.0
     invmass[0] = 0.0  # set the first particle static
-    invmass[N-1] = 0.01  # set the first particle static
+    invmass[N-1] = 0.001  # set the first particle static
 
 
 @ti.kernel
@@ -172,8 +172,9 @@ while gui.running:
     end = position[1:]
     gui.lines(begin, end, radius=3, color=0x0000FF)
     gui.circles(pos.to_numpy(), radius=5, color=0xffaa33)
-    filename = f'./data/frame_{frame:05d}.png'   # create filename with suffix png
-    frame += 1
-    if frame == 500:
-        break
-    gui.show(filename)
+    gui.show()
+    # filename = f'./data/frame_{frame:05d}.png'   # create filename with suffix png
+    # frame += 1
+    # if frame == 500:
+    #     break
+    # gui.show(filename)

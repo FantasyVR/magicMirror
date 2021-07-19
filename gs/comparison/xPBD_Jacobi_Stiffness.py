@@ -50,7 +50,7 @@ def initConstraint():
         disConsIdx[i] = ti.Vector([i, i + 1])
         disConsLen[i] = (pos[i + 1] - pos[i]).norm()
         valpha[i] = alpha
-    valpha[NC-1] = 100 * alpha
+    valpha[0] = 100 * alpha
 
 @ti.kernel
 def semiEuler():
