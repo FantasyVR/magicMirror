@@ -1,7 +1,8 @@
 """
-Mass-spring system simulation based on [Stable Constrainted Dynamics, Maxime Tournier et.al, 2015.]
+Rod simulation based on [Stable Constrainted Dynamics, Maxime Tournier et.al, 2015.] 
+with Schur complement and Symmetric global system matrix.
 
-Solve the symmetric KKT system with Schur complement method and 2 CG solver
+The schur complement system matrix is solved by CG + LLT direct solver.
 """
 import taichi as ti
 from taichi.lang.ops import abs, sqrt
@@ -12,35 +13,35 @@ ti.init(arch=ti.cpu)
 gravity = ti.Vector([0, -9.8])
 h = 0.01  # timestep size
 
-NStep = 5  # number of steps in each frame
-NMaxIte = 1  # number of iterations in each step
-N = 20  # number of particles
-NE = (2 * N + 1) * N * 2  # number of edges
-NV = (N + 1)**2  # number of vertices
+NStep = 1  # number of steps in each frame
+NMaxIte = 5  # number of iterations in each step
+N = 50  # number of particles
+NC = N - 1  # number of distance constraint
 # CG
 MaxCGIte = 10
+LastMass = 100.0
 
-pos = ti.Vector.field(2, ti.f64, NV)
-oldPos = ti.Vector.field(2, ti.f64, NV)
-predictionPos = ti.Vector.field(2, ti.f64, NV)
-vel = ti.Vector.field(2, ti.f64, NV)
-mass = ti.field(ti.f64, NV)
+pos = ti.Vector.field(2, ti.f64, N)
+oldPos = ti.Vector.field(2, ti.f64, N)
+predictionPos = ti.Vector.field(2, ti.f64, N)
+vel = ti.Vector.field(2, ti.f64, N)
+mass = ti.field(ti.f64, N)
 
 disConsIdx = ti.Vector.field(
-    2, int, NE)  # each element store vertex indices of the constraint
+    2, int, NC)  # each element store vertex indices of the constraint
 disConsLen = ti.field(
-    ti.f64, NE
+    ti.f64, NC
 )  # rest state (rest length of spring in this example) of each constraint
-gradient = ti.Vector.field(2, ti.f64, 2 * NE)  # gradient of constraints
-constraint = ti.field(ti.f64, NE)  # constraints violation
+gradient = ti.Vector.field(2, ti.f64, 2 * NC)  # gradient of constraints
+constraint = ti.field(ti.f64, NC)  # constraints violation
 
 #xpbd values
 compliance = 1.0e-6
 alpha = compliance / h / h
-lagrangian = ti.field(ti.f64, NE)
+lagrangian = ti.field(ti.f64, NC)
 
 # geometric stiffness
-K = ti.Matrix.field(2, 2, ti.f64, (NV, NV))
+K = ti.Matrix.field(2, 2, ti.f64, (N, N))
 
 # For validation
 dualResidual = ti.field(ti.f64, ())
@@ -48,65 +49,34 @@ primalResidual = ti.field(ti.f64, ())
 maxdualResidual = ti.field(ti.f64, ())
 maxprimalResidual = ti.field(ti.f64, ())
 
-# For control
-attractor_pos = ti.Vector.field(2, float, ())
-attractor_strength = ti.field(float, ())
 
 
 @ti.kernel
-def init_pos():
-    for i, j in ti.ndrange(N + 1, N + 1):
-        k = i * (N + 1) + j
-        pos[k] = ti.Vector([i, j]) * 0.05 + ti.Vector([0.4, 0.4])
-        oldPos[k] = pos[k]
-        vel[k] = ti.Vector([0, 0])
-        mass[k] = 1.0
-    mass[0] = 0.0
-    # for i in range(N + 1):
-    #     k = i * (N + 1) + N
-    #     mass[k] = 0.0
-    # k0 = N
-    # k1 = (N + 2) * N
-    # mass[k0] = 0.0
-    # mass[k1] = 0.0
-
-
-@ti.kernel
-def init_mesh():
-    for i, j in ti.ndrange(N + 1, N):
-        # horizontal
-        a = i * (N + 1) + j
-        disConsIdx[i * N + j] = ti.Vector([a, a + 1])
-    start = N * (N + 1)
-    for i, j in ti.ndrange(N, N + 1):
-        # vertical
-        a = i * (N + 1) + j
-        disConsIdx[start + i + j * N] = ti.Vector([a, a + N + 1])
-    start = 2 * start
-    for i, j in ti.ndrange(N, N):
-        # diagonal
-        a = i * (N + 1) + j
-        disConsIdx[start + i * N + j] = ti.Vector([a, a + N + 2])
-    start += N * N
-    for i, j in ti.ndrange(N, N):
-        a = i * (N + 1) + j
-        disConsIdx[start + i * N + j] = ti.Vector([a + 1, a + N + 1])
+def initRod():
+    for i in range(N):
+        pos[i] = ti.Vector([0.5 + 0.1 * i, 0.7])
+        # pos[i] = ti.Vector([0.1 * i, 0.0])
+        # pos[i] = ti.Vector([0.5, 0.5- 0.1 * i])
+        oldPos[i] = pos[i]
+        vel[i] = ti.Vector([0.0, 0.0])
+        mass[i] = 1.0
+    mass[0] = 0.0  # set the first particle static
+    mass[N-1] = LastMass
 
 
 @ti.kernel
 def initConstraint():
-    for i in range(NE):
-        a, b = disConsIdx[i]
-        disConsLen[i] = (pos[a] - pos[b]).norm()
+    for i in range(NC):
+        disConsIdx[i] = ti.Vector([i, i + 1])
+        disConsLen[i] = (pos[i + 1] - pos[i]).norm()
 
 
 @ti.kernel
 def semiEuler():
     # semi-euler update pos & vel
-    for i in range(NV):
+    for i in range(N):
         if (mass[i] != 0.0):
-            vel[i] = vel[i] + h * gravity + attractor_strength[None] * (
-                attractor_pos[None] - pos[i]).normalized(1e-5)
+            vel[i] = vel[i] + h * gravity
             oldPos[i] = pos[i]
             pos[i] = pos[i] + h * vel[i]
             predictionPos[i] = pos[i]
@@ -114,20 +84,20 @@ def semiEuler():
 
 @ti.kernel
 def resetLambda():
-    for i in range(NE):
+    for i in range(NC):
         lagrangian[i] = 0.0
 
 
 @ti.kernel
 def resetK():
-    for i, j in ti.ndrange(NV, NV):
+    for i, j in ti.ndrange(N, N):
         K[i, j] = ti.Matrix([[0.0, 0.0], [0.0, 0.0]])
 
 
 # compute constraint vector and gradient vector
 @ti.kernel
 def computeCg():
-    for i in range(NE):
+    for i in range(NC):
         idx1, idx2 = disConsIdx[i]
         rest_len = disConsLen[i]
         invMass1 = mass[idx1]
@@ -140,6 +110,9 @@ def computeCg():
         n = (p1 - p2).normalized()
         # xpbd
         constraint[i] = l - rest_len - alpha * lagrangian[i]
+        # print("p1: ",p1, ", p2: ", p2)
+        # print("lambda: ", lagrangian[i])
+        # print("constraint ", i , ": ", constraint[i])
         gradient[2 * i + 0] = n
         gradient[2 * i + 1] = -n
         # geometric stiffness
@@ -156,22 +129,12 @@ def computeCg():
             K[idx2, idx1] -= k
             K[idx2, idx2] += k
 
-
-def computeSv(complianceMatrix, G, A, v):
-    Gv = G @ v
-    x0 = np.zeros(2*(NV-1),dtype=np.float64)
-    AinvGV = CG(A, Gv, x0)
-    return complianceMatrix @ v - np.transpose(G) @ AinvGV
-
 """
-Conjugate Gradient Method with LLT direct Solver
+Conjugate residual method
 """
-"""
-Conjugate gradient solver
-"""
-def CG(A, b, x0):
+def CR(A,b, x0):
     m, n = A.shape
-    assert (m == n and b.shape == x0.shape)
+    assert(m == n and m == b.shape[0] and b.shape == x0.shape)
     residual = 1.0e-6
     r0 = b - A @ x0
     if np.linalg.norm(r0) < residual:
@@ -180,24 +143,33 @@ def CG(A, b, x0):
     p = r0
     r = r0
     count = 0
-    while count < MaxCGIte:
-        Ap = A @ p
-        rr = sum(r * r)
-        alpha = rr / sum(p * Ap)
+    Ap = A @ p
+    while True:
+        Ar = A @ r  
+        rAr = sum(r * Ar)
+        alpha = rAr / sum(Ap * Ap)
         x = x + alpha * p
         r_next = r - alpha * Ap
         if np.linalg.norm(r_next) < residual:
             break
-        beta = sum(r_next * r_next) / rr
+        Ar_next = A @ r_next
+        beta = sum(r_next * Ar_next)/ rAr
         p = r_next + beta * p
         r = r_next
+        Ap = Ar_next + beta * Ap 
         count += 1
-    # print(f"number of iteration: {count}")
     return x
+
+def computeSv(complianceMatrix, G, A, v):
+    Gv = G @ v
+    x0 = np.zeros(2*(N-1),dtype=np.float64)
+    AinvGV = CR(A, Gv, x0)
+    return complianceMatrix @ v - np.transpose(G) @ AinvGV
+
 """
-Two CG Iteration to solve the big linear system
+CG with CR Iteration to solve the big linear system
 """
-def CGwithCG(complianceMatrix, G, A, b, x0):
+def CGwithCR(complianceMatrix, G, A, b, x0):
     m, n = A.shape
     assert (m == n and b.shape == x0.shape)
     residual = 1.0e-6
@@ -223,7 +195,6 @@ def CGwithCG(complianceMatrix, G, A, b, x0):
         count += 1
     # print(f"number of iteration: {count}")
     return x
-
 """
 Solve the linear system with schur complement method
 A x = b
@@ -238,24 +209,24 @@ Reference: https://en.wikipedia.org/wiki/Schur_complement
 """
 
 
-def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, step):
-    dim = 2 * NV  # the system dimension
-
+def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
+    print(f"------------------  iteration: {iteration} --------------")
+    dim = 2 * N
+    # upper left matrix
     A = np.zeros((dim, dim), dtype=np.float64)
     # uppper left: mass matrix
-    for i in range(NV):
+    for i in range(N):
         A[2 * i, 2 * i] = mass[i]
         A[2 * i + 1, 2 * i + 1] = mass[i]
 
     # uppper left: geometric stiffness
-    if step != 0:
-        for i in range(NV):
-            for j in range(NV):
-                A[2 * i:2 * i + 2, 2 * j:2 * j + 2] += KK[i, j]
+    for i in range(N):
+        for j in range(N):
+            A[2 * i:2 * i + 2, 2 * j:2 * j + 2] += KK[i, j]
 
     # gradient matrix
-    G = np.zeros((2 * NV, NE))
-    for i in range(NE):
+    G = np.zeros((2 * N, NC))
+    for i in range(NC):
         idx1, idx2 = cidx[i]
         g0 = g[2 * i + 0]
         g1 = g[2 * i + 1]
@@ -263,33 +234,43 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, step):
         G[2 * idx2:2 * idx2 + 2, i] = g1
 
     # compliance matrix
-    complianceMatrix = np.zeros((NE, NE), dtype=np.float64)
+    complianceMatrix = np.zeros((NC, NC), dtype=np.float64)
     np.fill_diagonal(complianceMatrix, -alpha)
 
     # RHS
     u = np.zeros(dim, dtype=np.float64)
-    for i in range(1, NV):
+    # geometric stiffness
+    for i in range(1, N):
         u[2 * i:2 * i + 2] = -mass[i] * (p[i] - prep[i])
     np.set_printoptions(precision=5, suppress=False)
     print(f"nomr(lambda): {np.linalg.norm(l)}")
+    # print(f"norm(M(x-y)): {np.linalg.norm(u[2:])}")
     Gl = G @ l
+    # print(f"norm(GL): {np.linalg.norm(Gl[2:])}")
+    # print(f"{l} <<< Lagrangian")
     u -= Gl
     print(f">>> Primal Residual: {np.linalg.norm(u[2:])}")
     v = -c
     print(f">>> Dual Residual: {np.linalg.norm(v)}")
-
+    # print(f"c: {c}")
+    # static point removed
     A = A[2:, 2:]
     G = G[2:, :]
     u = u[2:]
 
     # CG Solver
-    x0 = np.zeros(2*(NV-1),dtype=np.float64)
-    AinvU = CG(A, u, x0)
+    # print(f"A: \n {A}")
+    x0 = np.zeros(2*(N-1),dtype=np.float64)
+    AinvU = CR(A, u, x0)
     b = v - np.transpose(G) @ AinvU
-
-    x0 = np.zeros(NE, dtype=np.float64)
-    dl = CGwithCG(complianceMatrix, G, A, b, x0)
+    # Big CG Solver
+    x0 = np.zeros(NC, dtype=np.float64)
+    print(f"A.shape:{A.shape}")
+    print(f"b.shape:{b.shape}")
+    print(f"x0.shape:{x0.shape}")
+    dl = CGwithCR(complianceMatrix, G, A, b, x0)
     dx = np.linalg.solve(A, u - G @ dl)
+
     print(f"norm(dx): {np.linalg.norm(dx)}")
     print(f"norm(dl): {np.linalg.norm(dl)}")
     return dx, dl
@@ -297,49 +278,58 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, step):
 
 @ti.kernel
 def updateV():
-    for i in range(NV):
+    for i in range(N):
         if mass[i] != 0.0:
             vel[i] = (pos[i] - oldPos[i]) / h
 
-
 @ti.kernel
 def updatePosLambda(dx: ti.ext_arr(), dl: ti.ext_arr()):
-    for i in range(NV - 1):
+    for i in range(N - 1):
         pos[i + 1] += ti.Vector([dx[2 * i + 0], dx[2 * i + 1]])
-    for i in range(NE):
+    for i in range(NC):
         lagrangian[i] += dl[i]
 
 
-init_pos()
-init_mesh()
+initRod()
 initConstraint()
-gui = ti.GUI('Mesh Stable Constrainted Dynamics')
-pause = True
+gui = ti.GUI('Stable Constrainted Dynamics')
+pause = False
+count = 0
+frame = 0
 while gui.running:
     for e in gui.get_events(gui.PRESS):
         if e.key == gui.ESCAPE:
             gui.running = False
         if e.key == gui.SPACE:
             pause = not pause
-    mouse_pos = gui.get_cursor_pos()
-    attractor_pos[None] = mouse_pos
-    attractor_strength[None] = gui.is_pressed(gui.LMB) - gui.is_pressed(
-        gui.RMB)
-    gui.circle(mouse_pos, radius=15, color=0x336699)
     if not pause:
         for step in range(NStep):
+            print(
+                f"######################### Timestep: {count} ##############################"
+            )
+            count += 1
             semiEuler()
             for ite in range(NMaxIte):
                 resetK()
                 computeCg()
-                dx, dl = solveWithSchurComplement(mass.to_numpy(), pos.to_numpy(),
-                                  predictionPos.to_numpy(),
-                                  gradient.to_numpy(), K.to_numpy(),
-                                  lagrangian.to_numpy(), constraint.to_numpy(),
-                                  disConsIdx.to_numpy(), step)
+                dx, dl = solveWithSchurComplement(mass.to_numpy(),
+                                                  pos.to_numpy(),
+                                                  predictionPos.to_numpy(),
+                                                  gradient.to_numpy(),
+                                                  K.to_numpy(),
+                                                  lagrangian.to_numpy(),
+                                                  constraint.to_numpy(),
+                                                  disConsIdx.to_numpy(), ite)
                 updatePosLambda(dx, dl)
             updateV()
 
     position = pos.to_numpy()
+    begin = position[:-1]
+    end = position[1:]
+    gui.lines(begin, end, radius=3, color=0x0000FF)
     gui.circles(pos.to_numpy(), radius=5, color=0xffaa33)
-    gui.show()
+    filename = f'./data/frame_{frame:05d}.png'   # create filename with suffix png
+    frame += 1
+    if frame == 300:
+        break    
+    gui.show(filename)
