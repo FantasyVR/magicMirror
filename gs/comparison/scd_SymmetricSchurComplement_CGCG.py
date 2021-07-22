@@ -15,10 +15,10 @@ h = 0.01  # timestep size
 
 NStep = 1  # number of steps in each frame
 NMaxIte = 5  # number of iterations in each step
-N = 50  # number of particles
+N = 5  # number of particles
 NC = N - 1  # number of distance constraint
 # CG
-MaxCGIte = 10
+MaxCGIte = 3
 LastMass = 100.0
 
 pos = ti.Vector.field(2, ti.f64, N)
