@@ -2,7 +2,7 @@
 Rod simulation based on [Stable Constrainted Dynamics, Maxime Tournier et.al, 2015.] 
 with Schur complement and Symmetric global system matrix.
 
-The schur complement system matrix is solved by CG + LLT direct solver.
+The schur complement system matrix is solved by two CR direct solver.
 """
 from numpy.lib import RankWarning
 import taichi as ti
@@ -16,11 +16,11 @@ h = 0.01  # timestep size
 
 NStep = 1  # number of steps in each frame
 NMaxIte = 5  # number of iterations in each step
-N = 150  # number of particles
+N = 5  # number of particles
 NC = N - 1  # number of distance constraint
 # CG
-MaxCGIte = 10
-LastMass = 1.0
+MaxCRIte = 2
+LastMass = 100.0
 
 pos = ti.Vector.field(2, ti.f64, N)
 oldPos = ti.Vector.field(2, ti.f64, N)
@@ -49,7 +49,6 @@ dualResidual = ti.field(ti.f64, ())
 primalResidual = ti.field(ti.f64, ())
 maxdualResidual = ti.field(ti.f64, ())
 maxprimalResidual = ti.field(ti.f64, ())
-
 
 
 @ti.kernel
@@ -101,9 +100,9 @@ def computeCg():
     for i in range(NC):
         idx1, idx2 = disConsIdx[i]
         rest_len = disConsLen[i]
-        invMass1 = mass[idx1]
-        invMass2 = mass[idx2]
-        sumInvMass = invMass1 + invMass2
+        mass1 = mass[idx1]
+        mass2 = mass[idx2]
+        sumInvMass = mass1 + mass2
         if sumInvMass < 1.0e-6:
             print("Wrong Mass Setting")
         p1, p2 = pos[idx1], pos[idx2]
@@ -132,9 +131,9 @@ def computeCg():
 """
 Conjugate residual method
 """
-def CR(A,b, x0):
+def CR(A, b, x0):
     m, n = A.shape
-    assert(m == n and m == b.shape[0] and b.shape == x0.shape)
+    assert (m == n and m == b.shape[0] and b.shape == x0.shape)
     residual = 1.0e-6
     r0 = b - A @ x0
     if np.linalg.norm(r0) < residual:
@@ -153,22 +152,26 @@ def CR(A,b, x0):
         if np.linalg.norm(r_next) < residual:
             break
         Ar_next = A @ r_next
-        beta = sum(r_next * Ar_next)/ rAr
+        beta = sum(r_next * Ar_next) / rAr
         p = r_next + beta * p
         r = r_next
         Ap = Ar_next + beta * Ap 
         count += 1
     return x
 
+
 def computeSv(complianceMatrix, G, A, v):
     Gv = G @ v
-    x0 = np.zeros(2*(N-1),dtype=np.float64)
+    x0 = np.zeros(2 * (N - 1), dtype=np.float64)
     AinvGV = CR(A, Gv, x0)
     return complianceMatrix @ v - np.transpose(G) @ AinvGV
+ 
 
 """
 Two CR Iteration to solve the big linear system
 """
+
+
 def CRwithCR(complianceMatrix, G, A, b, x0):
     m, n = A.shape
     assert (m == n and b.shape == x0.shape)
@@ -182,7 +185,7 @@ def CRwithCR(complianceMatrix, G, A, b, x0):
     r = r0
     count = 0
     Sp = computeSv(complianceMatrix, G, A, p)
-    while count < MaxCGIte:
+    while count < MaxCRIte:
         Sr = computeSv(complianceMatrix, G, A, r)
         rSr = sum(r * Sr)
         alpha = rSr / sum(Sp * Sp)
@@ -190,7 +193,7 @@ def CRwithCR(complianceMatrix, G, A, b, x0):
         r_next = r - alpha * Sp
         if np.linalg.norm(r_next) < residual:
             break
-        Sr_next = computeSv(complianceMatrix,G, A, r_next)
+        Sr_next = computeSv(complianceMatrix, G, A, r_next)
         beta = sum(r_next * Sr_next) / rSr
         p = r_next + beta * p
         r = r_next
@@ -198,6 +201,8 @@ def CRwithCR(complianceMatrix, G, A, b, x0):
         count += 1
     # print(f"number of iteration: {count}")
     return x
+
+
 """
 Solve the linear system with schur complement method
 A x = b
@@ -263,7 +268,7 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
 
     # CG Solver
     # print(f"A: \n {A}")
-    x0 = np.zeros(2*(N-1),dtype=np.float64)
+    x0 = np.zeros(2 * (N - 1), dtype=np.float64)
     AinvU = CR(A, u, x0)
     b = v - np.transpose(G) @ AinvU
     # Big CG Solver
@@ -284,6 +289,7 @@ def updateV():
     for i in range(N):
         if mass[i] != 0.0:
             vel[i] = (pos[i] - oldPos[i]) / h
+
 
 @ti.kernel
 def updatePosLambda(dx: ti.ext_arr(), dl: ti.ext_arr()):
@@ -333,6 +339,7 @@ while gui.running:
     gui.circles(pos.to_numpy(), radius=5, color=0xffaa33)
     filename = f'./data/frame_{frame:05d}.png'   # create filename with suffix png
     frame += 1
-    # if frame == 300:
-    #     break    
+    if frame == 300:
+        break    
     gui.show(filename)
+    

@@ -2,8 +2,9 @@
 Rod simulation based on [Stable Constrainted Dynamics, Maxime Tournier et.al, 2015.] 
 with Schur complement and Symmetric global system matrix.
 
-The schur complement system matrix is solved by CG + CR direct solver.
+The schur complement system matrix is solved by two CR direct solver.
 """
+from numpy.lib import RankWarning
 import taichi as ti
 from taichi.lang.ops import abs, sqrt
 import numpy as np
@@ -15,10 +16,10 @@ h = 0.01  # timestep size
 
 NStep = 1  # number of steps in each frame
 NMaxIte = 5  # number of iterations in each step
-N = 50  # number of particles
+N = 5  # number of particles
 NC = N - 1  # number of distance constraint
 # CG
-MaxCGIte = 10
+MaxCRIte = 2
 LastMass = 100.0
 
 pos = ti.Vector.field(2, ti.f64, N)
@@ -38,6 +39,7 @@ constraint = ti.field(ti.f64, NC)  # constraints violation
 #xpbd values
 compliance = 1.0e-6
 alpha = compliance / h / h
+valpha = ti.field(ti.f64, NC)
 lagrangian = ti.field(ti.f64, NC)
 
 # geometric stiffness
@@ -48,7 +50,6 @@ dualResidual = ti.field(ti.f64, ())
 primalResidual = ti.field(ti.f64, ())
 maxdualResidual = ti.field(ti.f64, ())
 maxprimalResidual = ti.field(ti.f64, ())
-
 
 
 @ti.kernel
@@ -69,6 +70,8 @@ def initConstraint():
     for i in range(NC):
         disConsIdx[i] = ti.Vector([i, i + 1])
         disConsLen[i] = (pos[i + 1] - pos[i]).norm()
+        valpha[i] = alpha
+    valpha[0] = 100 * alpha
 
 
 @ti.kernel
@@ -100,16 +103,16 @@ def computeCg():
     for i in range(NC):
         idx1, idx2 = disConsIdx[i]
         rest_len = disConsLen[i]
-        invMass1 = mass[idx1]
-        invMass2 = mass[idx2]
-        sumInvMass = invMass1 + invMass2
+        mass1 = mass[idx1]
+        mass2 = mass[idx2]
+        sumInvMass = mass1 + mass2
         if sumInvMass < 1.0e-6:
             print("Wrong Mass Setting")
         p1, p2 = pos[idx1], pos[idx2]
         l = (p1 - p2).norm()
         n = (p1 - p2).normalized()
         # xpbd
-        constraint[i] = l - rest_len - alpha * lagrangian[i]
+        constraint[i] = l - rest_len - valpha[i] * lagrangian[i]
         # print("p1: ",p1, ", p2: ", p2)
         # print("lambda: ", lagrangian[i])
         # print("constraint ", i , ": ", constraint[i])
@@ -121,20 +124,19 @@ def computeCg():
             K = | Hessian_{x1,x1}, Hessian_{x1,x2}   |  = | k  -k|
                 | Hessian_{x1,x2}, Hessian_{x2,x2}   |    |-k   k|
         """
-        if lagrangian[i] > 0.0:
-            I = ti.Matrix([[1.0, 0.0], [0.0, 1.0]])
-            k = lagrangian[i] / l * (I - n @ n.transpose())
-            K[idx1, idx1] += k
-            K[idx1, idx2] -= k
-            K[idx2, idx1] -= k
-            K[idx2, idx2] += k
+        I = ti.Matrix([[1.0, 0.0], [0.0, 1.0]])
+        k = lagrangian[i] / l * (I - n @ n.transpose())
+        K[idx1, idx1] += k
+        K[idx1, idx2] -= k
+        K[idx2, idx1] -= k
+        K[idx2, idx2] += k
 
 """
 Conjugate residual method
 """
-def CR(A,b, x0):
+def CR(A, b, x0):
     m, n = A.shape
-    assert(m == n and m == b.shape[0] and b.shape == x0.shape)
+    assert (m == n and m == b.shape[0] and b.shape == x0.shape)
     residual = 1.0e-6
     r0 = b - A @ x0
     if np.linalg.norm(r0) < residual:
@@ -153,23 +155,27 @@ def CR(A,b, x0):
         if np.linalg.norm(r_next) < residual:
             break
         Ar_next = A @ r_next
-        beta = sum(r_next * Ar_next)/ rAr
+        beta = sum(r_next * Ar_next) / rAr
         p = r_next + beta * p
         r = r_next
         Ap = Ar_next + beta * Ap 
         count += 1
     return x
 
+
 def computeSv(complianceMatrix, G, A, v):
     Gv = G @ v
-    x0 = np.zeros(2*(N-1),dtype=np.float64)
+    x0 = np.zeros(2 * (N - 1), dtype=np.float64)
     AinvGV = CR(A, Gv, x0)
     return complianceMatrix @ v - np.transpose(G) @ AinvGV
+ 
 
 """
-CG with CR Iteration to solve the big linear system
+Two CR Iteration to solve the big linear system
 """
-def CGwithCR(complianceMatrix, G, A, b, x0):
+
+
+def CRwithCR(complianceMatrix, G, A, b, x0):
     m, n = A.shape
     assert (m == n and b.shape == x0.shape)
     residual = 1.0e-6
@@ -181,20 +187,25 @@ def CGwithCR(complianceMatrix, G, A, b, x0):
     p = r0
     r = r0
     count = 0
-    while count < MaxCGIte:
-        Sp = computeSv(complianceMatrix, G, A, p)
-        rr = sum(r * r)
-        alpha = rr / sum(p * Sp)
+    Sp = computeSv(complianceMatrix, G, A, p)
+    while count < MaxCRIte:
+        Sr = computeSv(complianceMatrix, G, A, r)
+        rSr = sum(r * Sr)
+        alpha = rSr / sum(Sp * Sp)
         x = x + alpha * p
         r_next = r - alpha * Sp
         if np.linalg.norm(r_next) < residual:
             break
-        beta = sum(r_next * r_next) / rr
+        Sr_next = computeSv(complianceMatrix, G, A, r_next)
+        beta = sum(r_next * Sr_next) / rSr
         p = r_next + beta * p
         r = r_next
+        Sp = Sr_next + beta * Sp
         count += 1
     # print(f"number of iteration: {count}")
     return x
+
+
 """
 Solve the linear system with schur complement method
 A x = b
@@ -235,7 +246,8 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
 
     # compliance matrix
     complianceMatrix = np.zeros((NC, NC), dtype=np.float64)
-    np.fill_diagonal(complianceMatrix, -alpha)
+    for i in range(NC):
+        complianceMatrix[i,i] = -valpha[i]
 
     # RHS
     u = np.zeros(dim, dtype=np.float64)
@@ -260,7 +272,7 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
 
     # CG Solver
     # print(f"A: \n {A}")
-    x0 = np.zeros(2*(N-1),dtype=np.float64)
+    x0 = np.zeros(2 * (N - 1), dtype=np.float64)
     AinvU = CR(A, u, x0)
     b = v - np.transpose(G) @ AinvU
     # Big CG Solver
@@ -268,7 +280,7 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
     print(f"A.shape:{A.shape}")
     print(f"b.shape:{b.shape}")
     print(f"x0.shape:{x0.shape}")
-    dl = CGwithCR(complianceMatrix, G, A, b, x0)
+    dl = CRwithCR(complianceMatrix, G, A, b, x0)
     dx = np.linalg.solve(A, u - G @ dl)
 
     print(f"norm(dx): {np.linalg.norm(dx)}")
@@ -281,6 +293,7 @@ def updateV():
     for i in range(N):
         if mass[i] != 0.0:
             vel[i] = (pos[i] - oldPos[i]) / h
+
 
 @ti.kernel
 def updatePosLambda(dx: ti.ext_arr(), dl: ti.ext_arr()):
@@ -333,3 +346,4 @@ while gui.running:
     if frame == 300:
         break    
     gui.show(filename)
+    
