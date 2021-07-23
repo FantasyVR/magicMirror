@@ -1,14 +1,9 @@
 """
 Rod simulation based on [Stable Constrainted Dynamics, Maxime Tournier et.al, 2015.] 
-with Schur complement and Symmetric global system matrix.
-
-The schur complement system matrix is solved by two CR direct solver.
-
-The Geometric stiffness matrix is approximated by two previous step gradient.
+with Schur complement and we make the global system matrix symmetric.
 """
-from numpy.lib import RankWarning
 import taichi as ti
-from taichi.lang.ops import max
+from taichi.lang.ops import abs, sqrt
 import numpy as np
 from numpy.linalg import inv
 
@@ -18,10 +13,8 @@ h = 0.01  # timestep size
 
 NStep = 1  # number of steps in each frame
 NMaxIte = 5  # number of iterations in each step
-N = 200  # number of particles
+N = 5  # number of particles
 NC = N - 1  # number of distance constraint
-# CR
-MaxCRIte = 10
 LastMass = 100.0
 
 pos = ti.Vector.field(2, ti.f64, N)
@@ -51,7 +44,6 @@ dualResidual = ti.field(ti.f64, ())
 primalResidual = ti.field(ti.f64, ())
 maxdualResidual = ti.field(ti.f64, ())
 maxprimalResidual = ti.field(ti.f64, ())
-
 
 # g in Non-smooth Newton methods for deformable multi-body dynamics, Eq.57
 g_pre = ti.Vector.field(2, ti.f64, N)
@@ -106,9 +98,9 @@ def computeCg(dx: ti.ext_arr()):
     for i in range(NC):
         idx1, idx2 = disConsIdx[i]
         rest_len = disConsLen[i]
-        mass1 = mass[idx1]
-        mass2 = mass[idx2]
-        sumInvMass = mass1 + mass2
+        invMass1 = mass[idx1]
+        invMass2 = mass[idx2]
+        sumInvMass = invMass1 + invMass2
         if sumInvMass < 1.0e-6:
             print("Wrong Mass Setting")
         p1, p2 = pos[idx1], pos[idx2]
@@ -121,88 +113,13 @@ def computeCg(dx: ti.ext_arr()):
         # print("constraint ", i , ": ", constraint[i])
         gradient[2 * i + 0] = n
         gradient[2 * i + 1] = -n
-    # Approximated Geometric Stifness Matrix
-    # please see: Non-Smooth Newton Methods for Deformable Multi-Body Dynamics, Eq.73
+    # Approximated geometric stiffness
+    # Please see: Non-Smooth Newton Methods for Deformable Multi-Body Dynamics, Eq.73
     for i in range(N):
         if mass[i] != 0.0 and dx[2*i-2] !=0.0 and dx[2*i-1] !=0.0:
             dg1 = g[i] - g_pre[i]
             K[i,i][0,0] += max(0,dg1[0]/dx[2*i-2] + mass[i])
             K[i,i][1,1] += max(0,dg1[1]/dx[2*i-1] + mass[i])
-
-
-"""
-Conjugate residual method
-"""
-def CR(A, b, x0):
-    m, n = A.shape
-    assert (m == n and m == b.shape[0] and b.shape == x0.shape)
-    residual = 1.0e-6
-    r0 = b - A @ x0
-    if np.linalg.norm(r0) < residual:
-        return x0
-    x = x0
-    p = r0
-    r = r0
-    count = 0
-    Ap = A @ p
-    while True:
-        Ar = A @ r
-        rAr = sum(r * Ar)
-        alpha = rAr / sum(Ap * Ap)
-        x = x + alpha * p
-        r_next = r - alpha * Ap
-        if np.linalg.norm(r_next) < residual:
-            break
-        Ar_next = A @ r_next
-        beta = sum(r_next * Ar_next) / rAr
-        p = r_next + beta * p
-        r = r_next
-        Ap = Ar_next + beta * Ap
-        count += 1
-    return x
-
-
-def computeSv(complianceMatrix, G, A, v):
-    Gv = G @ v
-    x0 = np.zeros(2 * (N - 1), dtype=np.float64)
-    AinvGV = CR(A, Gv, x0)
-    return complianceMatrix @ v - np.transpose(G) @ AinvGV
-
-
-"""
-Two CR Iteration to solve the big linear system
-"""
-
-
-def CRwithCR(complianceMatrix, G, A, b, x0):
-    m, n = A.shape
-    assert (m == n and b.shape == x0.shape)
-    residual = 1.0e-6
-    Sx0 = computeSv(complianceMatrix, G, A, x0)
-    r0 = b - Sx0
-    if np.linalg.norm(r0) < residual:
-        return x0
-    x = x0
-    p = r0
-    r = r0
-    count = 0
-    Sp = computeSv(complianceMatrix, G, A, p)
-    while count < MaxCRIte:
-        Sr = computeSv(complianceMatrix, G, A, r)
-        rSr = sum(r * Sr)
-        alpha = rSr / sum(Sp * Sp)
-        x = x + alpha * p
-        r_next = r - alpha * Sp
-        if np.linalg.norm(r_next) < residual:
-            break
-        Sr_next = computeSv(complianceMatrix, G, A, r_next)
-        beta = sum(r_next * Sr_next) / rSr
-        p = r_next + beta * p
-        r = r_next
-        Sp = Sr_next + beta * Sp
-        count += 1
-    # print(f"number of iteration: {count}")
-    return x
 
 @ti.kernel
 def update_g(g_new: ti.ext_arr()):
@@ -234,13 +151,14 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
         A[2 * i, 2 * i] = mass[i]
         A[2 * i + 1, 2 * i + 1] = mass[i]
 
-    # uppper left:diagnoal geometric stiffness
+    # uppper left: geometric stiffness
     for i in range(N):
-        A[2 * i, 2 * i] += KK[i, i][0, 0]
-        A[2 * i + 1, 2 * i + 1] += KK[i, i][1, 1]
+        A[2*i, 2*i]    += KK[i,i][0,0]
+        A[2*i+1,2*i+1] += KK[i,i][1,1]
+    # for i in range(N):
+    #     for j in range(N):
+    #         A[2 * i:2 * i + 2, 2 * j:2 * j + 2] += KK[i, j]
 
-    # print(f"A.shape: {A.shape}")
-    # print(f"A: {A}")
     # gradient matrix
     G = np.zeros((2 * N, NC))
     for i in range(NC):
@@ -261,13 +179,12 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
         u[2 * i:2 * i + 2] = -mass[i] * (p[i] - prep[i])
     np.set_printoptions(precision=5, suppress=False)
     print(f"nomr(lambda): {np.linalg.norm(l)}")
-    # print(f"norm(M(x-y)): {np.linalg.norm(u[2:])}")
+    print(f"norm(M(x-y)): {np.linalg.norm(u[2:])}")
     Gl = G @ l
-    # print(f"norm(GL): {np.linalg.norm(Gl[2:])}")
-    # print(f"{l} <<< Lagrangian")
+    print(f"norm(GL): {np.linalg.norm(Gl[2:])}")
     u -= Gl
-    
-    # update g 
+
+    #update g
     update_g(u)
 
     print(f">>> Primal Residual: {np.linalg.norm(u[2:])}")
@@ -278,23 +195,21 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
     A = A[2:, 2:]
     G = G[2:, :]
     u = u[2:]
+    # print(f"A: \n{A}")
+    # print(f"G: \n{G}")
+    # print(f"u: {u}, v: {v}")
+    # Schur complement
+    GTAinv = np.transpose(G) @ inv(A)
+    S = complianceMatrix - GTAinv @ G
 
-    # CG Solver
-    # print(f"A: \n {A}")
-    x0 = np.zeros(2 * (N - 1), dtype=np.float64)
-    AinvU = CR(A, u, x0)
-    b = v - np.transpose(G) @ AinvU
-    # Big CG Solver
-    x0 = np.zeros(NC, dtype=np.float64)
-    print(f"A.shape:{A.shape}")
-    print(f"b.shape:{b.shape}")
-    print(f"x0.shape:{x0.shape}")
-    dl = CRwithCR(complianceMatrix, G, A, b, x0)
-    dx = np.linalg.solve(A, u - G @ dl)
-
-    print(f"norm(dx): {np.linalg.norm(dx)}")
-    print(f"norm(dl): {np.linalg.norm(dl)}")
-    return dx, dl
+    b = v - GTAinv @ u
+    y = np.linalg.solve(S, b)  # delta lambda ??? some problems happend here
+    x = np.linalg.solve(A, u - G @ y)  # delta pos
+    # print(f"dx: {x}")
+    # print(f"dl: {y}")
+    print(f"norm(dx): {np.linalg.norm(x)}")
+    print(f"norm(dl): {np.linalg.norm(y)}")
+    return x, y
 
 
 @ti.kernel
@@ -302,6 +217,39 @@ def updateV():
     for i in range(N):
         if mass[i] != 0.0:
             vel[i] = (pos[i] - oldPos[i]) / h
+
+
+@ti.kernel
+def computeResidual(step: ti.i32):
+    dualResidual[None] = 0.0
+    primalResidual[None] = 0.0
+    for i in range(NC):
+        idx1, idx2 = disConsIdx[i]
+        rest_len = disConsLen[i]
+        mass1 = mass[idx1]
+        mass2 = mass[idx2]
+        p1, p2 = pos[idx1], pos[idx2]
+        constraint = (p1 - p2).norm() - rest_len
+
+        dualResidual[None] += abs(constraint + alpha * lagrangian[i])
+
+        gradient = (p1 - p2).normalized()
+        r0 = ti.Vector([0.0, 0.0])
+        r1 = r0
+        if mass1 != 0.0:
+            r0 = mass1 * (
+                p1 - predictionPos[idx1]) + lagrangian[i] * gradient
+        if mass2 != 0.0:
+            r1 = mass2 * (
+                p2 - predictionPos[idx2]) - lagrangian[i] * gradient
+        primalResidual[None] += sqrt(r0.norm_sqr() + r1.norm_sqr())
+    if maxdualResidual[None] < dualResidual[None]:
+        maxdualResidual[None] = dualResidual[None]
+    if maxprimalResidual[None] < primalResidual[None]:
+        maxprimalResidual[None] = primalResidual[None]
+    print("-----iteration:", step, "-------------")
+    print("Dual Residual: ", dualResidual[None])
+    print("Primal Residual: ", primalResidual[None])
 
 
 @ti.kernel
@@ -326,9 +274,7 @@ while gui.running:
             pause = not pause
     if not pause:
         for step in range(NStep):
-            print(
-                f"######################### Timestep: {count} ##############################"
-            )
+            print(f"######################### Timestep: {count} ##############################")
             count += 1
             semiEuler()
             dx = np.zeros(2 * (N - 1), dtype=np.float64)
@@ -345,14 +291,16 @@ while gui.running:
                                                   disConsIdx.to_numpy(), ite)
                 updatePosLambda(dx, dl)
             updateV()
-
+    
     position = pos.to_numpy()
     begin = position[:-1]
     end = position[1:]
     gui.lines(begin, end, radius=3, color=0x0000FF)
     gui.circles(pos.to_numpy(), radius=5, color=0xffaa33)
-    filename = f'./data/frame_{frame:05d}.png'  # create filename with suffix png
+
+    filename = f'./data/frame_{frame:05d}.png'   # create filename with suffix png
     frame += 1
     if frame == 300:
         break
     gui.show(filename)
+    # gui.show()
