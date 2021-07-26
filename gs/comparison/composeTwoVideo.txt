@@ -8,3 +8,25 @@ ffmpeg \
   -crf 23 \
   -preset veryfast \
   scd_DiagKBigMassComparison.mp4
+
+
+
+
+ffmpeg \
+  -i scd_GT.mp4\
+  -i scd_NOK.mp4\
+  -i scd_DiagK.mp4\
+  -i scd_ADiagK.mp4\
+  -filter_complex \
+  "[0:v][1:v]hstack[top]; \
+   [2:v][3:v]hstack[bottom]; \
+   [top][bottom]vstack,format=yuv420p[v]; \
+   [0:a][1:a][2:a][3:a]amerge=inputs=4[a]" \
+  -map "[v]" -map "[a]" -ac 2 output.mp4
+
+ffmpeg \
+  -i scd_GT.mp4\
+  -i scd_NOK.mp4\
+  -i scd_DiagK.mp4\
+  -i scd_ADiagK.mp4\
+-filter_complex "[0:v][1:v][2:v][3:v]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[v]" -map "[v]" output

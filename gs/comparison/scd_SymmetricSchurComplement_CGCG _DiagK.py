@@ -3,6 +3,8 @@ Rod simulation based on [Stable Constrainted Dynamics, Maxime Tournier et.al, 20
 with Schur complement and Symmetric global system matrix.
 
 The schur complement system matrix is solved by CG + LLT direct solver.
+
+Only the diagonal of K is used.
 """
 import taichi as ti
 from taichi.lang.ops import abs, sqrt
@@ -18,7 +20,7 @@ NMaxIte = 5  # number of iterations in each step
 N = 200  # number of particles
 NC = N - 1  # number of distance constraint
 # CG
-MaxCGIte = 1
+MaxCGIte = 10
 LastMass = 100.0
 
 pos = ti.Vector.field(2, ti.f64, N)
@@ -129,30 +131,49 @@ def computeCg():
             K[idx2, idx1] -= k
             K[idx2, idx2] += k
 
-
 """
-Compute S * v  with 
-    S = (-alpha) - (G^T * A^{-1} * G)
-    Sv = (-alpha)*v - G^T * [A^{-1} * Gv]
-complianceMatrix = -alpha
-A = LLT
-G: Gradient Matrix
+Conjugate gradient solver
 """
-def computeSv(complianceMatrix, G, L, v):
-    Gv = G @ v
-    y = np.linalg.solve(L, Gv)
-    invAGv = np.linalg.solve(np.transpose(L), y)
-    return complianceMatrix @ v - np.transpose(G) @ invAGv
-
-
-"""
-Conjugate Gradient Method with LLT direct Solver
-"""
-def CGwithLLT(complianceMatrix, G, L, b, x0):
-    m, n = L.shape
+def CG(A, b, x0):
+    m, n = A.shape
     assert (m == n and b.shape == x0.shape)
     residual = 1.0e-6
-    Sx0 = computeSv(complianceMatrix, G, L, x0)
+    r0 = b - A @ x0
+    if np.linalg.norm(r0) < residual:
+        return x0
+    x = x0
+    p = r0
+    r = r0
+    count = 0
+    while count < MaxCGIte:
+        Ap = A @ p
+        rr = sum(r * r)
+        alpha = rr / sum(p * Ap)
+        x = x + alpha * p
+        r_next = r - alpha * Ap
+        if np.linalg.norm(r_next) < residual:
+            break
+        beta = sum(r_next * r_next) / rr
+        p = r_next + beta * p
+        r = r_next
+        count += 1
+    # print(f"number of iteration: {count}")
+    return x
+
+def computeSv(complianceMatrix, G, A, v):
+    Gv = G @ v
+    x0 = np.zeros(2*(N-1),dtype=np.float64)
+    AinvGV = CG(A, Gv, x0)
+    return complianceMatrix @ v - np.transpose(G) @ AinvGV
+
+"""
+Two CG Iteration to solve the big linear system
+"""
+def CGwithCG(complianceMatrix, G, A, b, x0):
+    m, n = A.shape
+    assert (m == n and b.shape == x0.shape)
+    residual = 1.0e-6
+    Sx0 = computeSv(complianceMatrix, G, A, x0)
     r0 = b - Sx0
     if np.linalg.norm(r0) < residual:
         return x0
@@ -161,7 +182,7 @@ def CGwithLLT(complianceMatrix, G, L, b, x0):
     r = r0
     count = 0
     while count < MaxCGIte:
-        Sp = computeSv(complianceMatrix, G, L, p)
+        Sp = computeSv(complianceMatrix, G, A, p)
         rr = sum(r * r)
         alpha = rr / sum(p * Sp)
         x = x + alpha * p
@@ -174,8 +195,6 @@ def CGwithLLT(complianceMatrix, G, L, b, x0):
         count += 1
     # print(f"number of iteration: {count}")
     return x
-
-
 """
 Solve the linear system with schur complement method
 A x = b
@@ -202,8 +221,8 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
 
     # uppper left: geometric stiffness
     for i in range(N):
-        for j in range(N):
-            A[2 * i:2 * i + 2, 2 * j:2 * j + 2] += KK[i, j]
+        A[2*i, 2*i]    += KK[i,i][0,0]
+        A[2*i+1,2*i+1] += KK[i,i][1,1]
 
     # gradient matrix
     G = np.zeros((2 * N, NC))
@@ -241,15 +260,17 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
 
     # CG Solver
     # print(f"A: \n {A}")
-    L = np.linalg.cholesky(A)
-    y = np.linalg.solve(L, u)
-    x = np.linalg.solve(np.transpose(L), y)
-    b = v - np.transpose(G) @ x
-
+    x0 = np.zeros(2*(N-1),dtype=np.float64)
+    AinvU = CG(A, u, x0)
+    b = v - np.transpose(G) @ AinvU
     # Big CG Solver
     x0 = np.zeros(NC, dtype=np.float64)
-    dl = CGwithLLT(complianceMatrix, G, L, b, x0)
+    print(f"A.shape:{A.shape}")
+    print(f"b.shape:{b.shape}")
+    print(f"x0.shape:{x0.shape}")
+    dl = CGwithCG(complianceMatrix, G, A, b, x0)
     dx = np.linalg.solve(A, u - G @ dl)
+
     print(f"norm(dx): {np.linalg.norm(dx)}")
     print(f"norm(dl): {np.linalg.norm(dl)}")
     return dx, dl
@@ -310,6 +331,6 @@ while gui.running:
     # filename = f'./data/frame_{frame:05d}.png'   # create filename with suffix png
     # frame += 1
     # if frame == 300:
-    #     break
+    #     break    
     # gui.show(filename)
     gui.show()

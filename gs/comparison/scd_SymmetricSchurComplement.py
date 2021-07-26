@@ -13,8 +13,9 @@ h = 0.01  # timestep size
 
 NStep = 1  # number of steps in each frame
 NMaxIte = 5  # number of iterations in each step
-N = 10  # number of particles
+N = 5  # number of particles
 NC = N - 1  # number of distance constraint
+LastMass = 100.0
 
 pos = ti.Vector.field(2, ti.f64, N)
 oldPos = ti.Vector.field(2, ti.f64, N)
@@ -55,7 +56,7 @@ def initRod():
         vel[i] = ti.Vector([0.0, 0.0])
         mass[i] = 1.0
     mass[0] = 0.0  # set the first particle static
-    # mass[9] = 100.0
+    mass[N-1] = LastMass
 
 
 @ti.kernel
@@ -252,8 +253,9 @@ def updatePosLambda(dx: ti.ext_arr(), dl: ti.ext_arr()):
 initRod()
 initConstraint()
 gui = ti.GUI('Stable Constrainted Dynamics')
-pause = True
+pause = False
 count = 0
+frame = 0
 while gui.running:
     for e in gui.get_events(gui.PRESS):
         if e.key == gui.ESCAPE:
@@ -284,8 +286,12 @@ while gui.running:
     end = position[1:]
     gui.lines(begin, end, radius=3, color=0x0000FF)
     gui.circles(pos.to_numpy(), radius=5, color=0xffaa33)
-    gui.show()
-
+    # gui.show()
+    filename = f'./gt/frame_{frame:05d}.png'  # create filename with suffix png
+    frame += 1
+    if frame == 300:
+        break
+    gui.show(filename)
 # for step in range(NStep):
 #     print(f"######################### Timestep: {step} ##############################")
 #     step += 1
