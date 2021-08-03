@@ -2,13 +2,12 @@
 Rod simulation based on [Stable Constrainted Dynamics, Maxime Tournier et.al, 2015.] 
 with Schur complement and Symmetric global system matrix.
 
-The schur complement system matrix is solved by two CR direct solver.
+The schur complement system matrix is solved by CG + LLT direct solver.
 
-The Geometric stiffness matrix is approximated by two previous step gradient.
+The diagonal of K is approximated by finite difference.
 """
-from numpy.lib import RankWarning
 import taichi as ti
-from taichi.lang.ops import max
+from taichi.lang.ops import abs, sqrt
 import numpy as np
 from numpy.linalg import inv
 
@@ -18,10 +17,10 @@ h = 0.01  # timestep size
 
 NStep = 1  # number of steps in each frame
 NMaxIte = 5  # number of iterations in each step
-N = 5  # number of particles
+N = 100  # number of particles
 NC = N - 1  # number of distance constraint
-# CR
-MaxCRIte = 4
+# CG
+MaxCGIte = 10    
 LastMass = 100.0
 
 pos = ti.Vector.field(2, ti.f64, N)
@@ -35,7 +34,6 @@ disConsIdx = ti.Vector.field(
 disConsLen = ti.field(
     ti.f64, NC
 )  # rest state (rest length of spring in this example) of each constraint
-preGradient = ti.Vector.field(2, ti.f64, 2 * NC)
 gradient = ti.Vector.field(2, ti.f64, 2 * NC)  # gradient of constraints
 constraint = ti.field(ti.f64, NC)  # constraints violation
 
@@ -52,7 +50,6 @@ dualResidual = ti.field(ti.f64, ())
 primalResidual = ti.field(ti.f64, ())
 maxdualResidual = ti.field(ti.f64, ())
 maxprimalResidual = ti.field(ti.f64, ())
-
 
 # g in Non-smooth Newton methods for deformable multi-body dynamics, Eq.57
 g_pre = ti.Vector.field(2, ti.f64, N)
@@ -105,13 +102,11 @@ def resetK():
 @ti.kernel
 def computeCg(dx: ti.ext_arr()):
     for i in range(NC):
-        preGradient[i] = gradient[i]
-    for i in range(NC):
         idx1, idx2 = disConsIdx[i]
         rest_len = disConsLen[i]
-        mass1 = mass[idx1]
-        mass2 = mass[idx2]
-        sumInvMass = mass1 + mass2
+        invMass1 = mass[idx1]
+        invMass2 = mass[idx2]
+        sumInvMass = invMass1 + invMass2
         if sumInvMass < 1.0e-6:
             print("Wrong Mass Setting")
         p1, p2 = pos[idx1], pos[idx2]
@@ -124,30 +119,20 @@ def computeCg(dx: ti.ext_arr()):
         # print("constraint ", i , ": ", constraint[i])
         gradient[2 * i + 0] = n
         gradient[2 * i + 1] = -n
-        # approximated geometric stiffness
-        # please see: Non-Smooth Newton Methods for Deformable Multi-Body Dynamics, Eq.73
-        # if mass1 != 0.0 and dx[2*idx1-2] !=0.0 and dx[2*idx1-1] !=0.0:
-        #     dg1 = gradient[2 * i + 0] - preGradient[2 * i + 0] 
-        #     K[idx1, idx1][0, 0] += max(0, dg1[0] / dx[2 * idx1 - 2] + mass1)
-        #     K[idx1, idx1][1, 1] += max(0, dg1[1] / dx[2 * idx1 - 1] + mass1)
-        # if mass2 != 0.0 and dx[2*idx2-2] !=0.0 and dx[2*idx2-1] !=0.0:
-        #     dg2 = gradient[2 * i + 1] - preGradient[2 * i + 0]
-        #     K[idx2, idx2][0, 0] += max(0, dg2[0] / dx[2 * idx2 - 2] + mass2)
-        #     K[idx2, idx2][1, 1] += max(0, dg2[1] / dx[2 * idx2 - 1] + mass2)
     # Approximated Geometric Stifness Matrix
+    # please see: Non-Smooth Newton Methods for Deformable Multi-Body Dynamics, Eq.73
     for i in range(N):
         if mass[i] != 0.0 and dx[2*i-2] !=0.0 and dx[2*i-1] !=0.0:
             dg1 = g[i] - g_pre[i]
             K[i,i][0,0] += max(0,dg1[0]/dx[2*i-2] + mass[i])
             K[i,i][1,1] += max(0,dg1[1]/dx[2*i-1] + mass[i])
 
-
 """
-Conjugate residual method
+Conjugate gradient solver
 """
-def CR(A, b, x0):
+def CG(A, b, x0):
     m, n = A.shape
-    assert (m == n and m == b.shape[0] and b.shape == x0.shape)
+    assert (m == n and b.shape == x0.shape)
     residual = 1.0e-6
     r0 = b - A @ x0
     if np.linalg.norm(r0) < residual:
@@ -156,37 +141,31 @@ def CR(A, b, x0):
     p = r0
     r = r0
     count = 0
-    Ap = A @ p
-    while True:
-        Ar = A @ r
-        rAr = sum(r * Ar)
-        alpha = rAr / sum(Ap * Ap)
+    while count < MaxCGIte:
+        Ap = A @ p
+        rr = sum(r * r)
+        alpha = rr / sum(p * Ap)
         x = x + alpha * p
         r_next = r - alpha * Ap
         if np.linalg.norm(r_next) < residual:
             break
-        Ar_next = A @ r_next
-        beta = sum(r_next * Ar_next) / rAr
+        beta = sum(r_next * r_next) / rr
         p = r_next + beta * p
         r = r_next
-        Ap = Ar_next + beta * Ap
         count += 1
+    # print(f"number of iteration: {count}")
     return x
-
 
 def computeSv(complianceMatrix, G, A, v):
     Gv = G @ v
-    x0 = np.zeros(2 * (N - 1), dtype=np.float64)
-    AinvGV = CR(A, Gv, x0)
+    x0 = np.zeros(2*(N-1),dtype=np.float64)
+    AinvGV = CG(A, Gv, x0)
     return complianceMatrix @ v - np.transpose(G) @ AinvGV
 
-
 """
-Two CR Iteration to solve the big linear system
+Two CG Iteration to solve the big linear system
 """
-
-
-def CRwithCR(complianceMatrix, G, A, b, x0):
+def CGwithCG(complianceMatrix, G, A, b, x0):
     m, n = A.shape
     assert (m == n and b.shape == x0.shape)
     residual = 1.0e-6
@@ -198,20 +177,17 @@ def CRwithCR(complianceMatrix, G, A, b, x0):
     p = r0
     r = r0
     count = 0
-    Sp = computeSv(complianceMatrix, G, A, p)
-    while count < MaxCRIte:
-        Sr = computeSv(complianceMatrix, G, A, r)
-        rSr = sum(r * Sr)
-        alpha = rSr / sum(Sp * Sp)
+    while count < MaxCGIte:
+        Sp = computeSv(complianceMatrix, G, A, p)
+        rr = sum(r * r)
+        alpha = rr / sum(p * Sp)
         x = x + alpha * p
         r_next = r - alpha * Sp
         if np.linalg.norm(r_next) < residual:
             break
-        Sr_next = computeSv(complianceMatrix, G, A, r_next)
-        beta = sum(r_next * Sr_next) / rSr
+        beta = sum(r_next * r_next) / rr
         p = r_next + beta * p
         r = r_next
-        Sp = Sr_next + beta * Sp
         count += 1
     # print(f"number of iteration: {count}")
     return x
@@ -221,7 +197,7 @@ def update_g(g_new: ti.ext_arr()):
     for i in range(N):
         g_pre[i] = g[i]
         g[i]  = ti.Vector([g_new[2*i + 0], g_new[2 * i +1]])
-
+        
 """
 Solve the linear system with schur complement method
 A x = b
@@ -246,13 +222,11 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
         A[2 * i, 2 * i] = mass[i]
         A[2 * i + 1, 2 * i + 1] = mass[i]
 
-    # uppper left:diagnoal geometric stiffness
+    # uppper left: geometric stiffness
     for i in range(N):
-        A[2 * i, 2 * i] += KK[i, i][0, 0]
-        A[2 * i + 1, 2 * i + 1] += KK[i, i][1, 1]
+        A[2*i, 2*i]    += KK[i,i][0,0]
+        A[2*i+1,2*i+1] += KK[i,i][1,1]
 
-    # print(f"A.shape: {A.shape}")
-    # print(f"A: {A}")
     # gradient matrix
     G = np.zeros((2 * N, NC))
     for i in range(NC):
@@ -278,10 +252,6 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
     # print(f"norm(GL): {np.linalg.norm(Gl[2:])}")
     # print(f"{l} <<< Lagrangian")
     u -= Gl
-    
-    # update g 
-    update_g(u)
-
     print(f">>> Primal Residual: {np.linalg.norm(u[2:])}")
     v = -c
     print(f">>> Dual Residual: {np.linalg.norm(v)}")
@@ -293,15 +263,15 @@ def solveWithSchurComplement(mass, p, prep, g, KK, l, c, cidx, iteration):
 
     # CG Solver
     # print(f"A: \n {A}")
-    x0 = np.zeros(2 * (N - 1), dtype=np.float64)
-    AinvU = CR(A, u, x0)
+    x0 = np.zeros(2*(N-1),dtype=np.float64)
+    AinvU = CG(A, u, x0)
     b = v - np.transpose(G) @ AinvU
     # Big CG Solver
     x0 = np.zeros(NC, dtype=np.float64)
     print(f"A.shape:{A.shape}")
     print(f"b.shape:{b.shape}")
     print(f"x0.shape:{x0.shape}")
-    dl = CRwithCR(complianceMatrix, G, A, b, x0)
+    dl = CGwithCG(complianceMatrix, G, A, b, x0)
     dx = np.linalg.solve(A, u - G @ dl)
 
     print(f"norm(dx): {np.linalg.norm(dx)}")
@@ -314,7 +284,6 @@ def updateV():
     for i in range(N):
         if mass[i] != 0.0:
             vel[i] = (pos[i] - oldPos[i]) / h
-
 
 @ti.kernel
 def updatePosLambda(dx: ti.ext_arr(), dl: ti.ext_arr()):
@@ -363,8 +332,9 @@ while gui.running:
     end = position[1:]
     gui.lines(begin, end, radius=3, color=0x0000FF)
     gui.circles(pos.to_numpy(), radius=5, color=0xffaa33)
-    filename = f'./data/frame_{frame:05d}.png'  # create filename with suffix png
-    frame += 1
-    if frame == 300:
-        break
-    gui.show(filename)
+    # filename = f'./data/frame_{frame:05d}.png'   # create filename with suffix png
+    # frame += 1
+    # if frame == 300:
+    #     break    
+    # gui.show(filename)
+    gui.show()

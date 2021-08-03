@@ -15,6 +15,7 @@ NStep = 1  # number of steps in each frame
 NMaxIte = 5  # number of iterations in each step
 N = 5  # number of particles
 NC = N - 1  # number of distance constraint
+LastMass = 100.0
 
 pos = ti.Vector.field(2, ti.f64, N)
 oldPos = ti.Vector.field(2, ti.f64, N)
@@ -55,7 +56,7 @@ def initRod():
         vel[i] = ti.Vector([0.0, 0.0])
         mass[i] = 1.0
     mass[0] = 0.0  # set the first particle static
-    mass[N-1] = 100.0
+    mass[N-1] = LastMass
 
 
 @ti.kernel
@@ -288,10 +289,9 @@ while gui.running:
     end = position[1:]
     gui.lines(begin, end, radius=3, color=0x0000FF)
     gui.circles(pos.to_numpy(), radius=5, color=0xffaa33)
-
+    # gui.show()
     filename = f'./data/frame_{frame:05d}.png'   # create filename with suffix png
     frame += 1
     if frame == 300:
         break
     gui.show(filename)
-    # gui.show()
