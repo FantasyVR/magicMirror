@@ -117,29 +117,21 @@ def initObj(file):
 
     return vertices, triangles
 
-def isIntersectionX(p0,p1,x0):
-    a, b = (p1 -  p0)/np.linalg.norm(p1-p0)
-    b0, b1 = x0 - p0 
-    t = b1 / b 
-    r = a * t -b0 
-
-    if r > 0 and t > 0:
-        point = p0 + t * np.array([a,b])
-        if np.linalg.norm(point-p0) < np.linalg.norm(p1-p0):
-            # print(f"r:{r}, t:{t}")
-            return True
+def isIntersectionX(p0, p1, x0):
+    a, b = p1 - p0
+    b0, b1 = x0 - p0
+    t = b1 / b
+    r = a * t - b0
+    if r > 0 and 0 < t < 1:
+        return True
 
 def isIntersectionY(p0,p1,x0):
-    a, b = (p1 -  p0)/np.linalg.norm(p1-p0)
+    a, b = p1 -  p0
     b0, b1 = x0 - p0 
     t = b0 / a 
     r = b * t - b1
-
-    if r > 0 and t > 0:
-        point = p0 + t * np.array([a,b])
-        if np.linalg.norm(point-p0) < np.linalg.norm(p1-p0):
-            # print(f"r:{r}, t:{t}")
-            return True
+    if r > 0 and 0 < t < 1:
+        return True
 
 def isIntersection(p0, p1, x0):
     a, b = (p1 -  p0)/np.linalg.norm(p1-p0)
