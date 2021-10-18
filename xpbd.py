@@ -57,7 +57,7 @@ def resetLagrangian():
         lagrangian[i] = 0.0
 
 @ti.kernel
-def update(ts:ti.i32, ite:ti.i32):
+def update():
     # # solve constriant
     for i in range(NC):
         idx1,idx2 = disConsIdx[i]
