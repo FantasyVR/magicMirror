@@ -12,7 +12,7 @@ h = 0.003  # timestep size
 compliance = 1.0e-3  # Fat Tissuse compliance, for more specific material,please see: http://blog.mmacklin.com/2016/10/12/xpbd-slides-and-stiffness/
 alpha = compliance * (1.0 / h / h
                       )  # timestep related compliance, see XPBD paper
-N = 100
+N = 10
 NF = 2 * N**2  # number of faces
 NV = (N + 1)**2  # number of vertices
 pos = ti.Vector.field(2, float, NV)
@@ -208,11 +208,11 @@ while gui.running:
             updteVelocity()
     ti.sync()
     start = time.time()
-    # faces = f2v.to_numpy()
-    # for i in range(NF):
-    #     ia, ib, ic = faces[i]
-    #     a, b, c = pos[ia], pos[ib], pos[ic]
-    #     gui.triangle(a, b, c, color=0x00FF00)
+    faces = f2v.to_numpy()
+    for i in range(NF):
+        ia, ib, ic = faces[i]
+        a, b, c = pos[ia], pos[ib], pos[ic]
+        gui.triangle(a, b, c, color=0x00FF00)
 
     positions = pos.to_numpy()
     gui.circles(positions, radius=2, color=0x0000FF)
@@ -226,4 +226,4 @@ while gui.running:
     sumTime = (end - realStart)
     print("Draw Time Ratio; ", drawTime / sumTime )
 
-ti.kernel_profiler_print()
+# ti.print_kernel_profile_info()
