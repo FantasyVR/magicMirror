@@ -4,7 +4,7 @@ We use XPBD(cpu version) to simulate springs
 import taichi as ti
 from taichi.lang.ops import abs, sqrt
 
-ti.init(arch=ti.cpu)
+ti.init(arch=ti.gpu)
 h = 0.01  # timestep size
 compliance = 1.0e-6
 alpha = compliance * (1.0 / h / h)
@@ -84,7 +84,7 @@ def update():
 
 
 @ti.kernel
-def updatePV():
+def updateV():
     # # update pos and vel
     for i in range(N):
         if (invmass[i] != 0.0):
@@ -143,7 +143,7 @@ while gui.running:
             resetLagrangian()
             for ite in range(NMaxIte):
                 update()
-            updatePV()
+            updateV()
             computeResidual()
 
     position = pos.to_numpy()
