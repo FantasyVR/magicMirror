@@ -64,7 +64,7 @@ def init_mesh():
         f2v[k + 1] = [c, d, a]
 
 
-@ti.func
+@ti.kernel
 def resetLagrangian():
     for i in range(NF):
         lagrangian[i] = 0.0
@@ -108,7 +108,7 @@ def computeGradient(idx, U, S, V):
     g1 = ti.Vector([dcdx2, dcdx3])
     g2 = ti.Vector([dcdx4, dcdx5])
     return g0, g1, g2
-@ti.func
+@ti.kernel
 def semiEuler():
     # semi-Euler update pos & vel
     for i in range(NV):
@@ -117,13 +117,13 @@ def semiEuler():
                 attractor_pos[None] - pos[i]).normalized(1e-5)
             oldPos[i] = pos[i]
             pos[i] += h * vel[i]
-@ti.func
+@ti.kernel
 def updteVelocity():
     # update velocity
     for i in range(NV):
         if (invMass[i] != 0.0):
             vel[i] = (pos[i] - oldPos[i]) / h
-@ti.func
+@ti.kernel
 def solveConstraints():
     # solving constriants
     for i in range(NF):
@@ -225,7 +225,6 @@ def checkGradient():
     print("Sum Error: ", E)
 
 
-@ti.kernel
 def timestep():
     for i in range(NumSteps):
         semiEuler()
