@@ -1,0 +1,14 @@
+{
+    "config_version": 2,
+    "determinism_flag": 1,
+    "exception_handling" : 1,
+    "obtain_timings": 0,
+    "solver": {
+        "monitor_residual": 1,
+        "solver": "BICGSTAB",
+        "convergence": "RELATIVE_INI_CORE",
+        "preconditioner": {
+            "solver": "NOSOLVER"
+        }
+    }
+}

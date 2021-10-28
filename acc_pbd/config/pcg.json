@@ -1,0 +1,17 @@
+{
+    "config_version": 2,
+    "determinism_flag": 1,
+    "exception_handling" : 1,
+    "obtain_timings": 0,
+    "solver": {
+        "monitor_residual": 1,
+        "solver": "PCG",
+        "convergence": "RELATIVE_INI_CORE",
+        "preconditioner": {
+            "smoother": "JACOBI",
+            "presweeps": 0, 
+            "postsweeps": 3,
+            "obtain_timings": 0
+        }
+    }
+}
