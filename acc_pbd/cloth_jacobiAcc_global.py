@@ -1,10 +1,12 @@
 import taichi as ti
+import numpy as np
+from numpy.linalg import inv
 
 @ti.data_oriented
 class Cloth():
     def __init__(self, N, h):
         self.h = h  # timestep size
-        compliance = 1.0e-2  # Fat Tissuse compliance, for more specific material,please see: http://blog.mmacklin.com/2016/10/12/xpbd-slides-and-stiffness/
+        compliance = 1.0e-5  # Fat Tissuse compliance, for more specific material,please see: http://blog.mmacklin.com/2016/10/12/xpbd-slides-and-stiffness/
         self.alpha = compliance * (1.0 / h / h)  # timestep related compliance, see XPBD paper
         self.N = N
         self.NF = 2 * N**2  # number of faces
@@ -23,6 +25,7 @@ class Cloth():
 
         self.gradient = ti.Vector.field(2,float, 3 * self.NF)
         self.dLambda = ti.field(float, self.NF)
+        self.c = ti.field(float, self.NF)
         self.relax_ratio = 0.5
         self.init_mesh()
         self.init_pos()
@@ -34,7 +37,7 @@ class Cloth():
         pos, oldPos, vel, invMass = ti.static(self.pos, self.oldPos, self.vel, self.invMass)
         for i, j in ti.ndrange(N + 1, N + 1):
             k = i * (N + 1) + j
-            pos[k] = ti.Vector([i, j]) / N * 0.5 + ti.Vector([0.25, 0.3])
+            pos[k] = ti.Vector([i, j]) / N * 0.5 + ti.Vector([0.25, 0.1])
             self.prePos[k] = pos[k]
             oldPos[k] = pos[k]
             vel[k] = ti.Vector([0, 0])
@@ -146,40 +149,90 @@ class Cloth():
                 l = invM0 * g0.norm_sqr() + invM1 * g1.norm_sqr(
                 ) + invM2 * g2.norm_sqr()
                 residual =  constraint + self.alpha * lagrangian[i]
+                self.c[i] = residual
                 epsilon += residual**2
                 self.dLambda[i] = - residual / (l + self.alpha)
-                self.old_lagrangian[i] = self.lagrangian[i]
                 lagrangian[i] += self.dLambda[i]
                 self.gradient[3 * i + 0]  = g0
                 self.gradient[3 * i + 1]  = g1
                 self.gradient[3 * i + 2]  = g2
         return epsilon
 
-    @ti.kernel
-    def updatePos(self):
-        NF, f2v, invMass, pos, gradient = ti.static(self.NF, self.f2v, self.invMass, self.pos, self.gradient)
+    """
+    Assemble system matrix
+    A =   |  M      -J'  |
+          |  J   alpha |
+    b = |u| = |             0                   |
+        |v|   | -(constraint + alpha * lambda)  |
+    """
+    def solve_global(self):
+        NV, NF = self.NV, self.NF
+        invmass = self.invMass
+        dim = 2 * NV  # the system dimension
+        g = self.gradient.to_numpy()
+        inv_M = np.zeros((dim, dim), dtype=np.float32)
+        # uppper left: mass matrix
+        for i in range(NV):
+            inv_M[2 * i, 2 * i] = invmass[i]
+            inv_M[2 * i + 1, 2 * i + 1] = invmass[i]
+
+        # gradient matrix
+        G = np.zeros((2 * NV, NF))
         for i in range(NF):
-            ia, ib, ic = f2v[i]
-            invM0, invM1, invM2 = invMass[ia], invMass[ib], invMass[ic]
-            if (invM0 != 0.0):
-                pos[ia] += self.relax_ratio * invM0 * self.dLambda[i] * gradient[3 * i + 0]
-            if (invM1 != 0.0):
-                pos[ib] += self.relax_ratio * invM1 * self.dLambda[i] * gradient[3 * i + 1]
-            if (invM2 != 0.0):
-                pos[ic] += self.relax_ratio * invM2 * self.dLambda[i] * gradient[3 * i + 2]
-        for i in range(self.NV):
-            if pos[i][1] < 0.0:
-                pos[i][1] = 0.0
+            ia, ib, ic = self.f2v[i]
+            g0 = g[3 * i + 0]
+            g1 = g[3 * i + 1]
+            g2 = g[3 * i + 2]
+            G[2 * ia:2 * ia + 2, i] = g0
+            G[2 * ib:2 * ib + 2, i] = g1
+            G[2 * ic:2 * ic + 2, i] = g2
+
+        # compliance matrix
+        complianceMatrix = np.zeros((NF, NF), dtype=np.float32)
+        np.fill_diagonal(complianceMatrix, self.alpha)
+
+        # RHS
+        v = -self.c.to_numpy()
+
+        S = complianceMatrix + np.transpose(G) @ inv_M @ G # schur complement matrix
+
+        # Jacobi solver
+        Diag = np.array(np.diag(S))
+        LU = S
+        for i in range(self.NF):
+            S[i,i] = 0.0
+        dl = np.zeros(NF,dtype=np.float32)
+        for jacIte in range(1):
+            for i in range(NF):
+                sum = 0.0
+                for j in range(NF):
+                    if i != j:
+                        sum += LU[i, j] * dl[j]
+                dl[i] = (v[i] - sum)/Diag[i]
+        # Update delta X
+        dx = G @ dl
+        return dx, dl
     
+    @ti.kernel
+    def updatePosLambda(self, dx: ti.ext_arr(), dl: ti.ext_arr()):
+        for i in range(self.NV):
+            self.pos[i] += ti.Vector([dx[2 * i + 0], dx[2 * i + 1]])
+            if self.pos[i][1] < 0.0:
+                self.pos[i][1] = 0.0
+        for i in range(self.NF):
+            self.old_lagrangian[i] = self.lagrangian[i]
+            self.lagrangian[i] += dl[i]
+
+
     @ti.kernel
     def applyPrimalChebyshev(self, omega: ti.f32):
         for i in range(self.NV):
             self.pos[i] *= omega
             self.pos[i] += (1-omega) * self.oldPos[i]
-
+    
     @ti.kernel
     def applyDualChebyshev(self, omega: ti.f32):
-        for i in range(self.NV):
+        for i in range(self.NV-1):
             self.lagrangian[i] *= omega
             self.lagrangian[i] += (1-omega) * self.old_lagrangian[i]
 

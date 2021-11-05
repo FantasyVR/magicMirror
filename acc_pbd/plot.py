@@ -4,15 +4,18 @@ import matplotlib.pyplot as plt
 import argparse
 
 parser = argparse.ArgumentParser(description='Acc stable constrainted dyanmics')
-parser.add_argument('--output', '-o',nargs=1, default="comparision.png", type=str, required=False)
+parser.add_argument('--output', '-o', nargs=1, default="image/comparision.png", type=str, required=False)
+parser.add_argument('--input1', '-i1',nargs=1, default="data/global.txt", type=str, required=False)
+parser.add_argument('--input2', '-i2',nargs=1, default="data/local.txt", type=str, required=False)
+
 args = parser.parse_args()
 output_file = args.output if type(args.output) is str else args.output[0]
+file1 = args.input1 if type(args.input1) is str else args.input1[0]
+file2 = args.input2 if type(args.input2) is str else args.input2[0]
 
-file1 = "./data/use_chebyshev.txt"
-file2 = "./data/no_chebyshev.txt"
-
-dual_residual_use_cheb = np.zeros(shape=500, dtype=np.float32)
-dual_residual_no_cheb = np.zeros(shape=500, dtype=np.float32)
+numpoints = 500
+dual_residual_use_cheb = np.zeros(shape=numpoints, dtype=np.float32)
+dual_residual_no_cheb = np.zeros(shape=numpoints, dtype=np.float32)
 with open(file1) as f1:
     ln = 0
     for line in f1.readlines():
@@ -31,9 +34,9 @@ assert(len(dual_residual_use_cheb) == len(dual_residual_no_cheb))
 
 fig, ax = plt.subplots() 
 fig.set_size_inches(20, 13)
-x = np.linspace(0,500,500)
-ax.plot(x, dual_residual_use_cheb, label='use_cheb')  # Plot some data on the axes.
-ax.plot(x, dual_residual_no_cheb,  label='no_cheb')  # Plot more data on the axes...
+x = np.linspace(0,numpoints,numpoints)
+ax.plot(x, dual_residual_use_cheb, label='local_chebyshev')  # Plot some data on the axes.
+ax.plot(x, dual_residual_no_cheb,  label='local_no_chebyshev')  # Plot more data on the axes...
 ax.set_yscale("log")
 ax.set_xlabel('timesteps')  # Add an x-label to the axes.
 ax.set_ylabel('dual residual')  # Add a y-label to the axes.
