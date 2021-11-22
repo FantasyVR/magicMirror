@@ -17,12 +17,11 @@ def CG(A,b, x0):
         Ap = A @ p 
         alpha = epsNew / sum(p * Ap)
         x = x + alpha * p
-        r_next = r - alpha * Ap
+        r = r - alpha * Ap
         epsOld = epsNew
-        epsNew = sum(r_next * r_next)
+        epsNew = sum(r * r)
         beta = epsNew / epsOld 
-        p = r_next + beta * p
-        r = r_next
+        p = r + beta * p
         count += 1
     return x, count
 
