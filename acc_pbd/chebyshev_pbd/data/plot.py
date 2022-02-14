@@ -20,7 +20,7 @@ lable2 = args.lable2 if type(args.lable2) is str else args.lable2[0]
 
 
 numpoints = 1000
-start_frame = 500
+start_frame = 0
 dual_residual_use_cheb = np.zeros(shape=numpoints, dtype=np.float32)
 dual_residual_no_cheb = np.zeros(shape=numpoints, dtype=np.float32)
 with open(file1) as f1:
