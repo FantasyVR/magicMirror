@@ -1,7 +1,7 @@
 import taichi as ti
 
-ti.init(arch=ti.cuda)
-N = 200
+ti.init(arch=ti.vulkan)
+N = 50
 NV = (N + 1)**2
 NT = 2 * N**2
 NE = 2 * N * (N + 1) + N**2
@@ -87,6 +87,7 @@ def semi_euler():
 
 @ti.kernel
 def solve_constraints():
+    ti.loop_config(serialize=True)
     for i in range(NE):
         idx0, idx1 = edge[i]
         invM0, invM1 = inv_mass[idx0], inv_mass[idx1]
@@ -132,17 +133,14 @@ camera.position(0.5, 0.0, 2.5)
 camera.lookat(0.5, 0.5, 0.0)
 camera.fov(90)
 
-paused[None] = 1
+frame = 0
 while window.running:
     for e in window.get_events(ti.ui.PRESS):
         if e.key in [ti.ui.ESCAPE]:
             exit()
-    if window.is_pressed(ti.ui.SPACE):
-        paused[None] = not paused[None]
+    
+    step()
 
-    if not paused[None]:
-        step()
-        paused[None] = not paused[None]
 
     camera.track_user_inputs(window, movement_speed=0.003, hold_key=ti.ui.RMB)
     scene.set_camera(camera)
@@ -150,5 +148,16 @@ while window.running:
 
     scene.mesh(pos, tri, color=(1.0,1.0,1.0), two_sided=True)
     scene.particles(pos, radius=0.01, color=(0.6,0.0,0.0))
+
+    file_name = f"data/obj/cloth_obj_{frame}.obj" 
+    with open(file_name, 'w') as obj:
+        positions = pos.to_numpy()
+        triangles = tri.to_numpy()
+        for v in positions:
+            obj.write(f"v {v[0]} {v[1]} {v[2]}\n" )
+        for f in range(NT):
+            obj.write(f"f {triangles[3 * f]+1} {triangles[3 * f+1]+1} {triangles[3 * f+2]+1}\n")
+    frame += 1
+
     canvas.scene(scene)
     window.show()

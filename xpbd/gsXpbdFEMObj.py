@@ -1,22 +1,29 @@
 """
-Then we use XPBD-FEM (gpu version, Jacobian solver) to simulate the deformation of 2D object
+This script could read ``.obj`` files into our scene as 2D object (y dimension is discarded). 
+Then we use XPBD-FEM (cpu version) to simulate the deformation of 2D object
 """
+import sys
+
+sys.path.append('.')
+from obj_reader.readObj import Objfile
 import taichi as ti
-import time
 from taichi.lang.ops import sqrt
 
-ti.init(arch=ti.gpu, kernel_profiler=True)
+ti.init(arch=ti.cpu, kernel_profiler=True)  # must be cpu
 
-h = 0.001  # timestep size
-
+h = 0.1  # timestep size
+staticPoint = 11
 compliance = 1.0e-3  # Fat Tissuse compliance, for more specific material,please see: http://blog.mmacklin.com/2016/10/12/xpbd-slides-and-stiffness/
 alpha = compliance * (1.0 / h / h
                       )  # timestep related compliance, see XPBD paper
-N = 5
-NF = 2 * N**2  # number of faces
-NV = (N + 1)**2  # number of vertices
+obj = Objfile()
+obj.read("./data/2dMesh.obj")
+vertices = obj.getVertice()
+triangles = obj.getFaces()
+
+NV = obj.getNumVertice()
+NF = obj.getNumFaces()  # number of faces
 pos = ti.Vector.field(2, float, NV)
-accPos = ti.Vector.field(2, float, NV)
 oldPos = ti.Vector.field(2, float, NV)
 vel = ti.Vector.field(2, float, NV)  # velocity of particles
 invMass = ti.field(float, NV)  #inverse mass of particles
@@ -25,12 +32,8 @@ B = ti.Matrix.field(2, 2, float, NF)  # D_m^{-1}
 F = ti.Matrix.field(2, 2, float, NF)  # deformation gradient
 lagrangian = ti.field(float, NF)  # lagrangian multipliers
 gravity = ti.Vector([0, -1.2])
-MaxIte = 20
-NumSteps = 5
-
-# For validation
-dualResidual = ti.field(float,())
-primalResidual = ti.field(float,())
+MaxIte = 5
+NumSteps = 3
 
 attractor_pos = ti.Vector.field(2, float, ())
 attractor_strength = ti.field(float, ())
@@ -38,19 +41,13 @@ attractor_strength = ti.field(float, ())
 
 @ti.kernel
 def init_pos():
-    for i, j in ti.ndrange(N + 1, N + 1):
-        k = i * (N + 1) + j
-        pos[k] = ti.Vector([i, j]) / N * 0.5 + ti.Vector([0.25, 0.25])
-        oldPos[k] = pos[k]
-        vel[k] = ti.Vector([0, 0])
-        invMass[k] = 1.0
-    for i in range(N + 1):
-        k = i * (N + 1) + N
-        invMass[k] = 0.0
-    k0 = N
-    k1 = (N + 2) * N
-    invMass[k0] = 0.0
-    invMass[k1] = 0.0
+    for i in range(NV):
+        pos[i] += ti.Vector([0.5, 0.5])
+        oldPos[i] = pos[i]
+        vel[i] = ti.Vector([0, 0])
+        invMass[i] = 1.0
+    for i in range(staticPoint):
+        invMass[i] = 0.0
     for i in range(NF):
         ia, ib, ic = f2v[i]
         a, b, c = pos[ia], pos[ib], pos[ic]
@@ -58,30 +55,19 @@ def init_pos():
         B[i] = B_i_inv.inverse()
 
 
-@ti.kernel
-def init_mesh():
-    for i, j in ti.ndrange(N, N):
-        k = (i * N + j) * 2
-        a = i * (N + 1) + j
-        b = a + 1
-        c = a + N + 2
-        d = a + N + 1
-        f2v[k + 0] = [a, b, c]
-        f2v[k + 1] = [c, d, a]
-
-
-@ti.kernel
+@ti.func
 def resetLagrangian():
     for i in range(NF):
         lagrangian[i] = 0.0
 
+
 @ti.func
 def computeGradient(idx, U, S, V):
-    isSuccess = True
     sumSigma = sqrt((S[0, 0] - 1)**2 + (S[1, 1] - 1)**2)
-    if sumSigma < 1.0e-6:
-        isSuccess = False
-
+    #print("Befor Sumsigma", sumSigma)
+    if sumSigma < 0.0000001:
+        sumSigma = 1.0
+    #print("SumSigma: ", sumSigma)
     dcdS = 1.0 / sumSigma * ti.Vector([S[0, 0] - 1, S[1, 1] - 1
                                        ])  # (dcdS11, dcdS22)
     dsdx2 = ti.Vector([
@@ -103,19 +89,19 @@ def computeGradient(idx, U, S, V):
     dsdx0 = -(dsdx2 + dsdx4)
     dsdx1 = -(dsdx3 + dsdx5)
     # constraint gradient
-    dcdx0 = dcdS.dot(dsdx0)
-    dcdx1 = dcdS.dot(dsdx1)
     dcdx2 = dcdS.dot(dsdx2)
     dcdx3 = dcdS.dot(dsdx3)
     dcdx4 = dcdS.dot(dsdx4)
     dcdx5 = dcdS.dot(dsdx5)
+    dcdx0 = dcdS.dot(dsdx0)
+    dcdx1 = dcdS.dot(dsdx1)
+    g0 = ti.Vector([dcdx0, dcdx1])
+    g1 = ti.Vector([dcdx2, dcdx3])
+    g2 = ti.Vector([dcdx4, dcdx5])
+    return g0, g1, g2
 
-    g0 = ti.Vector([dcdx0, dcdx1]) # constraint gradient with respect to x0
-    g1 = ti.Vector([dcdx2, dcdx3]) # constraint gradient with respect to x1
-    g2 = ti.Vector([dcdx4, dcdx5]) # constraint gradient with respect to x2
 
-    return g0, g1, g2, isSuccess
-@ti.kernel
+@ti.func
 def semiEuler():
     # semi-Euler update pos & vel
     for i in range(NV):
@@ -124,28 +110,19 @@ def semiEuler():
                 attractor_pos[None] - pos[i]).normalized(1e-5)
             oldPos[i] = pos[i]
             pos[i] += h * vel[i]
-@ti.kernel
-def updtePosition():
-    # update position
-    for i in range(NV):
-        if (invMass[i] != 0.0):
-            pos[i] += accPos[i]
 
-@ti.kernel
+
+@ti.func
 def updteVelocity():
     # update velocity
     for i in range(NV):
         if (invMass[i] != 0.0):
-            pos[i] += accPos[i]
             vel[i] = (pos[i] - oldPos[i]) / h
-@ti.kernel
-def resetAccPos():
-    for i in range(NV):
-        accPos[i]  = ti.Vector([0.0,0.0])
 
-@ti.kernel
+
+@ti.func
 def solveConstraints():
-    # solving constriants parallel
+    # solving constriants
     for i in range(NF):
         ia, ib, ic = f2v[i]
         a, b, c = pos[ia], pos[ib], pos[ic]
@@ -163,21 +140,21 @@ def solveConstraints():
         # we don't need this if condition at all
         # if constraint < 1.0e-6:
         #     break
-        g0, g1, g2, isSuccess = computeGradient(i, U, S, V)
-        if isSuccess:
-            l = invM0 * g0.norm_sqr() + invM1 * g1.norm_sqr(
-            ) + invM2 * g2.norm_sqr()
-            # we don't need this at all, because alpha would make the Denominator not equal 0
-            # if l < 1.0e-6:
-            #     break
-            deltaLambda = -(constraint + alpha * lagrangian[i]) / (l + alpha)
-            lagrangian[i] += deltaLambda
-            if (invM0 != 0.0):
-                accPos[ia] += 0.98 * invM0 * deltaLambda * g0
-            if (invM1 != 0.0):
-                accPos[ib] += 0.98 * invM1 * deltaLambda * g1
-            if (invM2 != 0.0):
-                accPos[ic] += 0.98 * invM2 * deltaLambda * g2
+        g0, g1, g2 = computeGradient(i, U, S, V)
+        l = invM0 * g0.norm_sqr() + invM1 * g1.norm_sqr(
+        ) + invM2 * g2.norm_sqr()
+        # we don't need this at all, because alpha would make the Denominator not equal 0
+        # if l < 1.0e-6:
+        #     break
+        deltaLambda = -(constraint + alpha * lagrangian[i]) / (l + alpha)
+        lagrangian[i] += deltaLambda
+        if (invM0 != 0.0):
+            pos[ia] += invM0 * deltaLambda * g0
+        if (invM1 != 0.0):
+            pos[ib] += invM1 * deltaLambda * g1
+        if (invM2 != 0.0):
+            pos[ic] += invM2 * deltaLambda * g2
+
 
 @ti.func
 def computeConstriant(idx, x0, x1, x2):
@@ -246,16 +223,24 @@ def checkGradient():
     print("Sum Error: ", E)
 
 
+@ti.kernel
+def timestep():
+    for i in range(NumSteps):
+        semiEuler()
+        resetLagrangian()
+        for ite in range(MaxIte):
+            solveConstraints()
+        updteVelocity()
 
-init_mesh()
+
+#init_pos(vertices, triangles)
+pos.from_numpy(0.2 * vertices[:, 0:3:2])
+f2v.from_numpy(triangles)
 init_pos()
 pause = False
 gui = ti.GUI('XPBD-FEM')
 first = True
-drawTime = 0
-sumTime = 0
 while gui.running:
-    realStart = time.time()
     for e in gui.get_events():
         if e.key == gui.ESCAPE:
             gui.running = False
@@ -265,40 +250,23 @@ while gui.running:
     attractor_pos[None] = mouse_pos
     attractor_strength[None] = gui.is_pressed(gui.LMB) - gui.is_pressed(
         gui.RMB)
-    
-
     gui.circle(mouse_pos, radius=15, color=0x336699)
     if not pause:
-        for i in range(NumSteps):
-            semiEuler()
-            resetLagrangian()
-            for ite in range(MaxIte):
-                resetAccPos()
-                solveConstraints()
-                updtePosition()
-            updteVelocity()
-        pass
+        #checkGradient()
+        timestep()
+    #     pass
     # if first:
     #     checkGradient()
     #     first = not first
-    ti.sync()
-    start = time.time()
-    faces = f2v.to_numpy()
-    for i in range(NF):
-        ia, ib, ic = faces[i]
-        a, b, c = pos[ia], pos[ib], pos[ic]
-        gui.triangle(a, b, c, color=0x00FF00)
-
+    # faces = f2v.to_numpy()
+    # for i in range(NF):
+    #     ia, ib, ic = faces[i]
+    #     a, b, c = pos[ia], pos[ib], pos[ic]
+    #     gui.triangle(a, b, c, color=0x00FF00)
     positions = pos.to_numpy()
     gui.circles(positions, radius=2, color=0x0000FF)
-    for i in range(N + 1):
-        k = i * (N + 1) + N
-        staticVerts = positions[k]
-        gui.circle(staticVerts, radius=5, color=0xFF0000)
+    for i in range(staticPoint):
+        gui.circle(positions[i], radius=5, color=0xFF0000)
     gui.show()
-    end = time.time()
-    drawTime = (end - start)
-    sumTime = (end - realStart)
-    print("Draw Time Ratio; ", drawTime / sumTime )
-
 ti.kernel_profiler_print()
+ti.print_profile_info()

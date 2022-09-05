@@ -1,6 +1,9 @@
+import sys 
+sys.path.append('..')
 import numpy as np
+from obj_reader.readObj import Objfile
+
 from scipy.sparse import coo_matrix
-from readObj import Objfile
 import taichi as ti
 ti.init(arch=ti.cpu)
 
@@ -118,7 +121,7 @@ def initObj(file):
 
 if __name__ == "__main__":
     pos, f2v = initCubeMesh(2)
-    # pos, f2v = initObj("armadillo.txt")
+    # pos, f2v = initObj("../data/armadillo.txt")
     
     print("Usage: Press SPACE to show boundary points and boundary edges.")
 

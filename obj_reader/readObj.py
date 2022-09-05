@@ -100,7 +100,7 @@ class Objfile:
 if __name__ == "__main__":
     objFile = Objfile()
     # objFile.read("2dMesh.obj")
-    objFile.readTxt("bunny.txt")
+    objFile.readTxt("../data/bunny.txt") 
     vertices = objFile.getVertice()
     print(vertices)
     faces = objFile.getFaces()

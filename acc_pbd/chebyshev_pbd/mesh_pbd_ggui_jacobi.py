@@ -1,7 +1,7 @@
 import taichi as ti
 
-ti.init(arch=ti.cuda)
-N = 100
+ti.init(arch=ti.vulkan)
+N = 50
 NV = (N + 1)**2
 NT = 2 * N**2
 NE = 2 * N * (N + 1) + N**2
@@ -145,7 +145,7 @@ camera.position(0.5, 0.0, 2.5)
 camera.lookat(0.5, 0.5, 0.0)
 camera.fov(90)
 
-paused[None] = 1
+paused[None] = 0
 while window.running:
     for e in window.get_events(ti.ui.PRESS):
         if e.key in [ti.ui.ESCAPE]:
@@ -153,9 +153,8 @@ while window.running:
     if window.is_pressed(ti.ui.SPACE):
         paused[None] = not paused[None]
 
-    if not paused[None]:
-        step()
-        paused[None] = not paused[None]
+    step()
+        # paused[None] = not paused[None]
 
     camera.track_user_inputs(window, movement_speed=0.003, hold_key=ti.ui.RMB)
     scene.set_camera(camera)

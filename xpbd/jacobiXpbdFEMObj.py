@@ -1,12 +1,17 @@
 """
 Then we use XPBD-FEM (gpu version, Jacobian solver) to simulate the deformation of 2D object
 """
+import time
+import sys
+
+sys.path.append('.')
+from obj_reader.readObj import Objfile
+
+import numpy as np
 import taichi as ti
 from taichi.lang.ops import sqrt
-from readObj import Objfile
-import time
 
-ti.init(arch=ti.gpu, kernel_profiler=True)
+ti.init(arch=ti.gpu)
 
 h = 0.003  # timestep size
 staticPoint = 8
@@ -16,7 +21,7 @@ alpha = compliance * (1.0 / h / h
                       )  # timestep related compliance, see XPBD paper
 obj = Objfile()
 # obj.read("./2dMesh.obj")
-obj.readTxt("./armadillo.txt")
+obj.readTxt("./data/armadillo.txt")
 vertices = obj.getVertice()
 triangles = obj.getFaces()
 
@@ -173,8 +178,8 @@ def solveConstraints():
 
 if __name__ == "__main__":
     # pos.from_numpy(0.2 * vertices[:,0:3:2]) # for .obj file
-    pos.from_numpy(vertices)  # for txt file
-    f2v.from_numpy(triangles)
+    pos.from_numpy(np.asarray(vertices, dtype=np.float32))  # for txt file
+    f2v.from_numpy(np.asarray(triangles, dtype=np.float32))
     init_pos()
     pause = False
     gui = ti.GUI('XPBD-Jacobi-OBJ')
@@ -226,5 +231,5 @@ if __name__ == "__main__":
     programEnd = time.time()
     print("Average Draw Time Ratio: ",
           sumDrawTime / (programEnd - programStart))
-    ti.kernel_profiler_print()
+    # ti.kernel_profiler_print()
     # ti.print_profile_info()

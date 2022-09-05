@@ -4,7 +4,7 @@ We use XPBD-FEM (cpu version) to simulate the deformation of 2D object
 import taichi as ti
 from taichi.lang.ops import sqrt
 
-ti.init(arch=ti.cpu, kernel_profiler=True) # must be cpu
+ti.init(arch=ti.cpu, kernel_profiler=False)  # must be cpu
 
 h = 0.1  # timestep size
 
@@ -108,6 +108,8 @@ def computeGradient(idx, U, S, V):
     g1 = ti.Vector([dcdx2, dcdx3])
     g2 = ti.Vector([dcdx4, dcdx5])
     return g0, g1, g2
+
+
 @ti.kernel
 def semiEuler():
     # semi-Euler update pos & vel
@@ -117,12 +119,16 @@ def semiEuler():
                 attractor_pos[None] - pos[i]).normalized(1e-5)
             oldPos[i] = pos[i]
             pos[i] += h * vel[i]
+
+
 @ti.kernel
 def updteVelocity():
     # update velocity
     for i in range(NV):
         if (invMass[i] != 0.0):
             vel[i] = (pos[i] - oldPos[i]) / h
+
+
 @ti.kernel
 def solveConstraints():
     # solving constriants
@@ -157,6 +163,7 @@ def solveConstraints():
             pos[ib] += invM1 * deltaLambda * g1
         if (invM2 != 0.0):
             pos[ic] += invM2 * deltaLambda * g2
+
 
 @ti.func
 def computeConstriant(idx, x0, x1, x2):
