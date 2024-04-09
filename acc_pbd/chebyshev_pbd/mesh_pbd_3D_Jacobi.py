@@ -15,7 +15,7 @@ inv_mass = ti.field(ti.f32, NV)
 vel = ti.Vector.field(3, ti.f32, NV)
 rest_len = ti.field(ti.f32, NE)
 h = 0.01
-MaxIte = 100
+MaxIte = 50
 
 paused = ti.field(ti.i32, shape=())
 
@@ -127,7 +127,7 @@ init_edge()
 window = ti.ui.Window("Display Mesh", (1024, 1024))
 canvas = window.get_canvas()
 scene = ti.ui.Scene()
-camera = ti.ui.make_camera()
+camera = ti.ui.Camera()
 camera.position(0.5, 0.0, 2.5)
 camera.lookat(0.5, 0.5, 0.0)
 camera.fov(90)
