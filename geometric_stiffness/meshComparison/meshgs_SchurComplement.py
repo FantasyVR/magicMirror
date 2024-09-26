@@ -147,7 +147,7 @@ def computeCg():
                 | Hessian_{x1,x2}, Hessian_{x2,x2}   |    |-k   k|
         """
         I = ti.Matrix([[1.0, 0.0], [0.0, 1.0]])
-        k = lagrangian[i] / l * (I - n @ n.transpose())
+        k = lagrangian[i] / l * (I - n.outer_product(n))
         K[idx1, idx1] += k
         K[idx1, idx2] -= k
         K[idx2, idx1] -= k
@@ -218,7 +218,7 @@ def updateV():
 
 
 @ti.kernel
-def updatePosLambda(dx: ti.ext_arr(), dl: ti.ext_arr()):
+def updatePosLambda(dx: ti.types.ndarray(), dl: ti.types.ndarray()):
     for i in range(NV - 1):
         pos[i + 1] += ti.Vector([dx[2 * i + 0], dx[2 * i + 1]])
     for i in range(NE):
